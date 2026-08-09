@@ -12,6 +12,7 @@ const state = {
   places: [],
   markers: { pickup: null, dest: null },
   editingTripId: null,
+  viewingTrip: null,
   routeCoords: null,
   cardCollapsed: false,
   saving: false,
@@ -102,21 +103,26 @@ async function init() {
   requestAnimationFrame(updateCardOffset);
 
   await loadPlaces();
-  // One-time cleanup from earlier bearer-token / service-worker experiments.
-  try { localStorage.removeItem('menged_token'); } catch (_) {}
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then((regs) => {
-      for (const r of regs) r.unregister();
-    });
-  }
-  if (window.caches) {
-    caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))));
-  }
 }
 
 function mapPadding() {
   const cardH = $('card').offsetHeight || 200;
-  return { top: 120, bottom: cardH + 24, left: 40, right: 40 };
+  let top = 120, bottom = cardH + 24, left = 40, right = 40;
+  const h = (map && map.getContainer().clientHeight) || 0;
+  const w = (map && map.getContainer().clientWidth) || 0;
+  if (h > 0 && top + bottom >= h) {
+    const max = Math.max(0, h - 16);
+    const scale = max / (top + bottom);
+    top = Math.floor(top * scale);
+    bottom = Math.floor(bottom * scale);
+  }
+  if (w > 0 && left + right >= w) {
+    const max = Math.max(0, w - 16);
+    const scale = max / (left + right);
+    left = Math.floor(left * scale);
+    right = Math.floor(right * scale);
+  }
+  return { top, bottom, left, right };
 }
 
 function updateCardOffset() {
@@ -155,12 +161,24 @@ function updatePeek() {
 }
 
 function fitRouteBounds(coords) {
-  if (!coords || !coords.length) return;
-  const bounds = coords.reduce(
-    (b, c) => b.extend(c),
-    new maplibregl.LngLatBounds(coords[0], coords[0])
+  coords = finiteCoords(coords);
+  if (!coords.length || !map) return;
+  try {
+    const bounds = coords.reduce(
+      (b, c) => b.extend(c),
+      new maplibregl.LngLatBounds(coords[0], coords[0])
+    );
+    map.fitBounds(bounds, { padding: mapPadding(), maxZoom: 16 });
+  } catch (err) {
+    console.warn('fitBounds failed', err);
+  }
+}
+
+function finiteCoords(coords) {
+  if (!coords || !coords.length) return [];
+  return coords.filter((c) =>
+    c && c.length >= 2 && Number.isFinite(c[0]) && Number.isFinite(c[1])
   );
-  map.fitBounds(bounds, { padding: mapPadding() });
 }
 
 function recenterMap() {
@@ -169,11 +187,10 @@ function recenterMap() {
     return;
   }
   if (state.pickup && state.dest) {
-    const bounds = new maplibregl.LngLatBounds(
+    fitRouteBounds([
       [state.pickup.lng, state.pickup.lat],
-      [state.dest.lng, state.dest.lat]
-    );
-    map.fitBounds(bounds, { padding: mapPadding() });
+      [state.dest.lng, state.dest.lat],
+    ]);
     return;
   }
   if (state.pickup) {
@@ -194,7 +211,8 @@ function nextPin() {
   return state.active;
 }
 
-function setPoint(kind, pt) {
+function setPoint(kind, pt, opts) {
+  opts = opts || {};
   state[kind] = {
     lat: pt.lat,
     lng: pt.lng,
@@ -214,7 +232,7 @@ function setPoint(kind, pt) {
       state.revSeq[kind] = (state.revSeq[kind] || 0) + 1;
       const dragSeq = state.revSeq[kind];
       state[kind] = { lat: ll.lat, lng: ll.lng };
-      m.setPopup(null);
+      setMarkerLabel(kind, null);
       renderPoints();
       reverseLabel(kind, dragSeq);
       requestEstimate();
@@ -226,7 +244,7 @@ function setPoint(kind, pt) {
   setMarkerLabel(kind, state[kind].label);
   renderPoints();
   if (!state[kind].label) reverseLabel(kind, seq);
-  requestEstimate();
+  if (!opts.skipEstimate) requestEstimate();
 }
 
 async function reverseLabel(kind, seq) {
@@ -276,7 +294,8 @@ function setMarkerLabel(kind, label) {
   const m = state.markers[kind];
   if (!m) return;
   if (!label) {
-    m.setPopup(null);
+    const old = m.getPopup();
+    if (old) old.remove();
     return;
   }
   m.setPopup(new maplibregl.Popup({ offset: 18, closeButton: false }).setText(shortLabel(label)));
@@ -318,9 +337,81 @@ function showToast(msg) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
 }
 
+function tripPlaceLabel(t, which) {
+  if (which === 'pickup') {
+    return t.pickup_label || t.pickup_lat.toFixed(5) + ', ' + t.pickup_lng.toFixed(5);
+  }
+  return t.dest_label || t.dest_lat.toFixed(5) + ', ' + t.dest_lng.toFixed(5);
+}
+
+function closeTripDetail() {
+  state.viewingTrip = null;
+  $('trip-detail').hidden = true;
+  $('history-list-view').hidden = false;
+  $('history-title').textContent = 'History';
+}
+
+function openTripDetail(t) {
+  state.viewingTrip = t;
+  const cur = state.cfg.rates.currency;
+  $('history-list-view').hidden = true;
+  $('trip-detail').hidden = false;
+  $('history-title').textContent = 'Trip';
+  $('detail-route').textContent = tripPlaceLabel(t, 'pickup') + ' → ' + tripPlaceLabel(t, 'dest');
+  $('detail-when').textContent = new Date(t.created_at).toLocaleString([], {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+  $('detail-km').textContent = t.distance_km.toFixed(2) + ' km';
+  $('detail-min').textContent = Math.round(t.duration_min) + ' min';
+  $('detail-suggested').textContent = cur + ' ' + t.suggested_fare;
+  $('detail-charged').textContent = t.actual_charged != null ? cur + ' ' + t.actual_charged : '—';
+  $('detail-mult').textContent = '×' + (t.multiplier > 0 ? t.multiplier : 1);
+  $('detail-rates').textContent =
+    cur + ' ' + t.rate_base + ' + ' + t.rate_per_km + '/km + ' + t.rate_per_min + '/min';
+  const note = (t.note || '').trim();
+  $('detail-note').hidden = !note;
+  $('detail-note').textContent = note ? 'Note: ' + note : '';
+}
+
+function showTripOnMap(t) {
+  $('history').hidden = true;
+  $('sheet-edit').hidden = true;
+  closeTripDetail();
+  setCardCollapsed(false);
+  state.multiplier = t.multiplier > 0 ? t.multiplier : 1;
+  setPoint('pickup', {
+    lat: t.pickup_lat,
+    lng: t.pickup_lng,
+    label: t.pickup_label || undefined,
+  }, { skipEstimate: true });
+  setPoint('dest', {
+    lat: t.dest_lat,
+    lng: t.dest_lng,
+    label: t.dest_label || undefined,
+  }, { skipEstimate: true });
+
+  if (t.route_geometry) {
+    state.estimate = {
+      distance_km: t.distance_km,
+      duration_min: t.duration_min,
+      geometry: t.route_geometry,
+      fare: t.suggested_fare,
+    };
+    state.savedKey = estimateKey(state.estimate);
+    drawRoute(t.route_geometry);
+    renderResult();
+    showToast('Saved route');
+    return;
+  }
+  requestEstimate();
+  showToast('Pins loaded — quoting…');
+}
+
 function repeatTrip(t) {
   $('history').hidden = true;
   $('sheet-edit').hidden = true;
+  closeTripDetail();
   setCardCollapsed(false);
   state.multiplier = t.multiplier > 0 ? t.multiplier : 1;
   setPoint('pickup', {
@@ -373,7 +464,8 @@ function renderPoints() {
       label.title = '';
     }
     $('btn-clear-' + kind).hidden = !pt;
-    $('btn-star-' + kind).hidden = !pt || !!(pt && pt.label);
+    const alreadySaved = !!(pt && pt.label && state.places.some((p) => p.label === pt.label));
+    $('btn-star-' + kind).hidden = !pt || alreadySaved;
     $('row-' + kind).classList.toggle('active', state.active === kind && state.pickup && state.dest);
   }
 }
@@ -464,13 +556,12 @@ let pendingGeometry = null;
 
 function drawRoute(encoded) {
   if (!encoded) return;
-  // Estimate can finish before map 'load' adds the route source.
   if (!map.getSource('route')) {
     pendingGeometry = encoded;
     return;
   }
   pendingGeometry = null;
-  const coords = decodePolyline(encoded);
+  const coords = finiteCoords(decodePolyline(encoded));
   if (!coords.length) return;
   state.routeCoords = coords;
   map.getSource('route').setData({
@@ -515,23 +606,30 @@ function renderChips() {
   bar.innerHTML = '';
   bar.hidden = state.places.length === 0;
   for (const p of state.places) {
-    const chip = document.createElement('button');
+    const chip = document.createElement('div');
     chip.className = 'chip';
-    chip.textContent = p.label;
-    chip.onclick = () => setPoint(nextPin(), { lat: p.lat, lng: p.lng, label: p.label });
 
-    let timer;
-    const start = () => { timer = setTimeout(async () => {
-      if (confirm('Remove saved place "' + p.label + '"?')) {
-        await api('/api/places/' + p.id, { method: 'DELETE' });
-        await loadPlaces();
-      }
-    }, 650); };
-    const cancel = () => clearTimeout(timer);
-    chip.addEventListener('touchstart', start, { passive: true });
-    chip.addEventListener('touchend', cancel);
-    chip.addEventListener('touchmove', cancel);
-    chip.addEventListener('contextmenu', (e) => e.preventDefault());
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.className = 'chip-use';
+    use.textContent = p.label;
+    use.onclick = () => setPoint(nextPin(), { lat: p.lat, lng: p.lng, label: p.label });
+
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'chip-x';
+    x.title = 'Remove place';
+    x.setAttribute('aria-label', 'Remove ' + p.label);
+    x.textContent = '×';
+    x.onclick = () => {
+      if (!confirm('Remove saved place "' + p.label + '"?')) return;
+      api('/api/places/' + p.id, { method: 'DELETE' })
+        .then(() => loadPlaces())
+        .catch((err) => alert(err.message));
+    };
+
+    chip.appendChild(use);
+    chip.appendChild(x);
     bar.appendChild(chip);
   }
 }
@@ -547,8 +645,8 @@ async function savePlace(kind) {
       body: JSON.stringify({ label: label.trim(), lat: pt.lat, lng: pt.lng }),
     });
     state[kind] = { lat: p.lat, lng: p.lng, label: p.label };
-    renderPoints();
     await loadPlaces();
+    renderPoints();
   } catch (err) {
     alert(err.message);
   }
@@ -615,8 +713,11 @@ async function saveTrip() {
   }
 }
 
-async function openHistory() {
+async function openHistory(opts) {
+  opts = opts || {};
   $('history').hidden = false;
+  if (!opts.keepDetail) closeTripDetail();
+
   const list = $('history-list');
   list.innerHTML = '';
   let trips;
@@ -644,10 +745,12 @@ async function openHistory() {
     '<div><b>' + cur + ' ' + Math.round(chargedTotal) + '</b> charged</div>' +
     '<div class="muted" style="align-self:end">this month</div>';
 
+  let viewing = null;
   for (const t of trips) {
+    if (state.viewingTrip && t.id === state.viewingTrip.id) viewing = t;
     const li = document.createElement('li');
-    const from = t.pickup_label || t.pickup_lat.toFixed(3) + ',' + t.pickup_lng.toFixed(3);
-    const to = t.dest_label || t.dest_lat.toFixed(3) + ',' + t.dest_lng.toFixed(3);
+    const from = shortLabel(t.pickup_label) || t.pickup_lat.toFixed(3) + ',' + t.pickup_lng.toFixed(3);
+    const to = shortLabel(t.dest_label) || t.dest_lat.toFixed(3) + ',' + t.dest_lng.toFixed(3);
     const when = new Date(t.created_at).toLocaleString([], {
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     });
@@ -657,22 +760,13 @@ async function openHistory() {
       '<span class="trip-charged">' + charged + '</span></div>' +
       '<div class="trip-row-bottom"><span>' + when + ' · ' + t.distance_km.toFixed(1) +
       ' km · ' + Math.round(t.duration_min) + ' min</span>' +
-      '<span>suggested ' + t.suggested_fare + '</span></div>' +
-      '<div class="trip-actions">' +
-      '<button type="button" data-act="repeat">Repeat</button>' +
-      '<button type="button" data-act="edit">Edit</button>' +
-      '</div>';
+      '<span>suggested ' + t.suggested_fare + '</span></div>';
     li.querySelector('.trip-route').textContent = from + ' → ' + to;
-    li.querySelector('[data-act="repeat"]').onclick = (e) => {
-      e.stopPropagation();
-      repeatTrip(t);
-    };
-    li.querySelector('[data-act="edit"]').onclick = (e) => {
-      e.stopPropagation();
-      openEditSheet(t);
-    };
+    li.onclick = () => openTripDetail(t);
     list.appendChild(li);
   }
+  if (opts.keepDetail && viewing) openTripDetail(viewing);
+  else if (opts.keepDetail && state.viewingTrip) closeTripDetail();
 }
 
 function openEditSheet(t) {
@@ -695,24 +789,25 @@ async function saveEdit() {
       body: JSON.stringify(patch),
     });
     $('sheet-edit').hidden = true;
-    await openHistory();
+    await openHistory({ keepDetail: !!state.viewingTrip });
   } catch (err) {
     alert(err.message);
   }
 }
 
-async function deleteTrip() {
+function deleteTrip() {
+  const id = state.editingTripId || (state.viewingTrip && state.viewingTrip.id);
+  if (!id) return;
   if (!confirm('Delete this trip?')) return;
-  try {
-    await api('/api/trips/' + state.editingTripId, { method: 'DELETE' });
-    $('sheet-edit').hidden = true;
-    await openHistory();
-  } catch (err) {
-    alert(err.message);
-  }
+  api('/api/trips/' + id, { method: 'DELETE' })
+    .then(() => {
+      $('sheet-edit').hidden = true;
+      state.viewingTrip = null;
+      state.editingTripId = null;
+      return openHistory();
+    })
+    .catch((err) => alert(err.message));
 }
-
-$('card').addEventListener('click', (e) => e.stopPropagation());
 
 $('card-handle').onclick = (e) => {
   e.stopPropagation();
@@ -795,12 +890,12 @@ function circleRing(lng, lat, radiusM, steps = 64) {
   const latRad = lat * Math.PI / 180;
   const mPerDegLat = 111320;
   const mPerDegLng = 111320 * Math.cos(latRad);
+  if (!(mPerDegLng > 1e-6) || !Number.isFinite(radiusM)) return coords;
   for (let i = 0; i <= steps; i++) {
     const t = (i / steps) * 2 * Math.PI;
-    coords.push([
-      lng + (radiusM * Math.cos(t)) / mPerDegLng,
-      lat + (radiusM * Math.sin(t)) / mPerDegLat,
-    ]);
+    const x = lng + (radiusM * Math.cos(t)) / mPerDegLng;
+    const y = lat + (radiusM * Math.sin(t)) / mPerDegLat;
+    if (Number.isFinite(x) && Number.isFinite(y)) coords.push([x, y]);
   }
   return coords;
 }
@@ -948,7 +1043,27 @@ $('btn-save-cancel').onclick = () => { $('sheet-save').hidden = true; };
 $('btn-save-confirm').onclick = saveTrip;
 
 $('btn-history').onclick = () => openHistory();
-$('btn-history-back').onclick = () => { $('history').hidden = true; };
+$('btn-history-back').onclick = () => {
+  if (!$('trip-detail').hidden) {
+    closeTripDetail();
+    return;
+  }
+  $('history').hidden = true;
+};
+$('btn-detail-map').onclick = () => {
+  if (state.viewingTrip) showTripOnMap(state.viewingTrip);
+};
+$('btn-detail-repeat').onclick = () => {
+  if (state.viewingTrip) repeatTrip(state.viewingTrip);
+};
+$('btn-detail-edit').onclick = () => {
+  if (state.viewingTrip) openEditSheet(state.viewingTrip);
+};
+$('btn-detail-delete').onclick = () => {
+  if (!state.viewingTrip) return;
+  state.editingTripId = state.viewingTrip.id;
+  deleteTrip();
+};
 $('btn-edit-cancel').onclick = () => { $('sheet-edit').hidden = true; };
 $('btn-edit-save').onclick = saveEdit;
 $('btn-edit-delete').onclick = deleteTrip;

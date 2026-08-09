@@ -45,7 +45,6 @@ type orsSummary struct {
 }
 
 func (o *orsRouter) Route(ctx context.Context, from, to Point) (Route, error) {
-	// radiuses: snap each pin to a road within N metres (ORS default 350 is tight for map taps).
 	body, _ := json.Marshal(map[string]any{
 		"coordinates": [][]float64{{from.Lng, from.Lat}, {to.Lng, to.Lat}},
 		"radiuses":    []int{5000, 5000},
@@ -68,6 +67,9 @@ func (o *orsRouter) Route(ctx context.Context, from, to Point) (Route, error) {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		err := fmt.Errorf("ors: %s: %s", resp.Status, msg)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			if isORSUnroutable(msg) {
+				err = fmt.Errorf("%w: %v", ErrUnroutable, err)
+			}
 			return Route{}, permanentRouteError{err}
 		}
 		return Route{}, err
@@ -176,6 +178,13 @@ func (p *peliasGeocoder) getJSON(ctx context.Context, rawURL string, dest any) e
 		return fmt.Errorf("pelias: decode: %w", err)
 	}
 	return nil
+}
+
+func isORSUnroutable(body []byte) bool {
+	s := string(body)
+	return strings.Contains(s, "Could not find routable point") ||
+		strings.Contains(s, `"code":2010`) ||
+		strings.Contains(s, `"code": 2010`)
 }
 
 func peliasHits(features []peliasFeature) []PlaceHit {

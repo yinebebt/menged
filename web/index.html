@@ -41,13 +41,13 @@
     </div>
 
     <div class="points">
-      <div class="point-row" id="row-pickup" data-kind="pickup">
+      <div class="point-row" id="row-pickup">
         <span class="dot pickup"></span>
         <span class="point-label" id="label-pickup">Tap the map to set pickup</span>
         <button class="mini-btn" id="btn-star-pickup" title="Save as place" hidden>☆</button>
         <button class="mini-btn" id="btn-clear-pickup" title="Clear" hidden>✕</button>
       </div>
-      <div class="point-row" id="row-dest" data-kind="dest">
+      <div class="point-row" id="row-dest">
         <span class="dot dest"></span>
         <span class="point-label" id="label-dest">…then the destination</span>
         <button class="mini-btn" id="btn-star-dest" title="Save as place" hidden>☆</button>
@@ -91,10 +91,12 @@
 <div id="sheet-save" class="overlay" hidden>
   <div class="sheet">
     <h2>Save trip</h2>
-    <label>Amount charged (<span id="save-currency">ETB</span>)
+    <label>
+      <span class="sheet-caption">Amount charged (<span id="save-currency">ETB</span>)</span>
       <input id="save-amount" type="number" inputmode="decimal" step="any">
     </label>
-    <label>Note <span class="muted">optional</span>
+    <label>
+      <span class="sheet-caption">Note <span class="muted">optional</span></span>
       <input id="save-note" type="text" placeholder="passenger, waited 20 min, …">
     </label>
     <div class="sheet-actions">
@@ -108,12 +110,32 @@
 <div id="history" class="panel" hidden>
   <header>
     <button id="btn-history-back" class="icon-btn">←</button>
-    <div class="brand">History</div>
-    <a id="csv-link" href="/api/trips.csv" download>Export CSV</a>
+    <div class="brand" id="history-title">History</div>
   </header>
-  <div class="totals" id="history-totals"></div>
-  <ul id="history-list" class="trip-list"></ul>
-  <div id="history-empty" class="muted center" hidden>No trips saved yet.</div>
+  <div id="history-list-view">
+    <div class="totals" id="history-totals"></div>
+    <ul id="history-list" class="trip-list"></ul>
+    <div id="history-empty" class="muted center" hidden>No trips saved yet.</div>
+  </div>
+  <div id="trip-detail" class="trip-detail" hidden>
+    <div class="trip-detail-route" id="detail-route"></div>
+    <div class="muted" id="detail-when"></div>
+    <dl class="trip-detail-grid">
+      <div><dt>Distance</dt><dd id="detail-km"></dd></div>
+      <div><dt>Duration</dt><dd id="detail-min"></dd></div>
+      <div><dt>Suggested</dt><dd id="detail-suggested"></dd></div>
+      <div><dt>Charged</dt><dd id="detail-charged"></dd></div>
+      <div><dt>Multiplier</dt><dd id="detail-mult"></dd></div>
+      <div><dt>Rate card</dt><dd id="detail-rates"></dd></div>
+    </dl>
+    <p id="detail-note" class="trip-detail-note" hidden></p>
+    <div class="trip-actions">
+      <button type="button" id="btn-detail-map">Show on map</button>
+      <button type="button" id="btn-detail-repeat">Repeat</button>
+      <button type="button" id="btn-detail-edit">Edit</button>
+      <button type="button" id="btn-detail-delete" class="danger">Delete</button>
+    </div>
+  </div>
 </div>
 
 <!-- edit-trip sheet -->
@@ -121,14 +143,16 @@
   <div class="sheet">
     <h2>Edit trip</h2>
     <div class="muted" id="edit-summary"></div>
-    <label>Amount charged
+    <label>
+      <span class="sheet-caption">Amount charged</span>
       <input id="edit-amount" type="number" inputmode="decimal" step="any">
     </label>
-    <label>Note
+    <label>
+      <span class="sheet-caption">Note</span>
       <input id="edit-note" type="text">
     </label>
     <div class="sheet-actions">
-      <button id="btn-edit-delete" class="danger">Delete</button>
+      <button type="button" id="btn-edit-delete" class="danger">Delete</button>
       <span class="flex-spacer"></span>
       <button id="btn-edit-cancel">Cancel</button>
       <button id="btn-edit-save" class="primary">Save</button>
@@ -150,6 +174,22 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="https://unpkg.com/maplibre-gl@^5/dist/maplibre-gl.js"></script>
+<script>
+(function () {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.getRegistrations().then(function (regs) {
+    if (!regs.length) return;
+    var clearCaches = window.caches
+      ? caches.keys().then(function (keys) {
+          return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+        })
+      : Promise.resolve();
+    Promise.all(regs.map(function (r) { return r.unregister(); }))
+      .then(function () { return clearCaches; })
+      .then(function () { location.reload(); });
+  });
+})();
+</script>
 <script src="app.js"></script>
 </body>
 </html>

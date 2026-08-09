@@ -7,7 +7,6 @@ import (
 	"flag"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -29,7 +28,6 @@ func main() {
 	if err != nil {
 		fatal("config", err)
 	}
-	warnIfExposed(cfg)
 
 	store, err := OpenStore(cfg.Server.DBPath, schemaSQL)
 	if err != nil {
@@ -41,7 +39,10 @@ func main() {
 	if err != nil {
 		fatal("routing", err)
 	}
-	geocoder := NewGeocoder(cfg)
+	geocoder, err := NewGeocoder(cfg)
+	if err != nil {
+		fatal("geocoding", err)
+	}
 
 	web, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -49,8 +50,9 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:    cfg.Server.Listen,
-		Handler: NewServer(cfg, store, router, geocoder).routes(http.FileServerFS(web)),
+		Addr:              cfg.Server.Listen,
+		Handler:           NewServer(cfg, store, router, geocoder).routes(http.FileServerFS(web)),
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	go func() {
@@ -73,18 +75,6 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("shutdown", "err", err)
 	}
-}
-
-// warnIfExposed logs when listen is non-loopback (prefer reverse-proxy auth + HTTPS).
-func warnIfExposed(cfg *Config) {
-	host, _, err := net.SplitHostPort(cfg.Server.Listen)
-	if err != nil {
-		return
-	}
-	if host == "127.0.0.1" || host == "localhost" || host == "::1" {
-		return
-	}
-	slog.Warn("non-loopback listen; put HTTPS and Basic Auth on nginx/Caddy in front")
 }
 
 func fatal(msg string, err error) {

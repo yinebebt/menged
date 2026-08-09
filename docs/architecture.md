@@ -98,7 +98,8 @@ Flat, one `package main`. Packages can be extracted later if the tree grows.
 menged/
 ├── main.go / config.go / handlers.go
 ├── fare.go (+ fare_test.go)     # pure fare arithmetic
-├── geo.go (+ geo_test.go)       # Router / Geocoder interfaces + shared helpers
+├── geo.go (+ geo_test.go)       # Router / Geocoder interfaces, service area,
+│                                # route + reverse caches, typed geo errors
 ├── ors.go                       # HeiGIT ORS directions + Pelias geocoding
 ├── osrm.go                      # self-hosted OSRM directions
 ├── store.go / schema.sql        # SQLite trips + places
@@ -115,13 +116,14 @@ menged/
 ## 4. Estimate request flow
 
 1. Browser has both pins → `POST /api/estimate {pickup, dest}`.
-2. Handler validates coordinates inside a service bbox (roughly Ethiopia).
-3. `router.Route(from, to)` → distance, duration, encoded polyline. Timeout ~5 s; one
-   retry only on transient errors (not ORS 4xx / unroutable pins).
+2. Handler validates coordinates via `InServiceArea` (Ethiopia-ish bbox in `geo.go`).
+3. `router.Route(from, to)` → distance, duration, encoded polyline. `NewRouter` wraps the
+   provider with an in-memory cache (~10 m–rounded keys, few minutes TTL) and one retry
+   only on transient errors (not ORS 4xx / unroutable pins).
 4. `CalculateFare(...)` → amount + breakdown.
 5. Client decodes the polyline onto MapLibre (waits for map load if needed).
 
-Identical ~10 m–rounded coordinate pairs are cached in memory for a few minutes.
+ORS snap failures unwrap to `ErrUnroutable` (HTTP 422); handlers do not string-match ORS JSON.
 
 ---
 
@@ -145,4 +147,5 @@ Startup warns if listen is non-loopback.
 
 - Polyline: Google-encoded precision-5 (what ORS returns); client decodes for the map.
 - Config: YAML with `${ENV}` expansion (`ORS_API_KEY`).
-- History: full-screen panel over the estimate UI; repeat / edit / CSV from there.
+- History: full-screen panel over the estimate UI; tap a row for detail, then show on
+  map / repeat / edit.

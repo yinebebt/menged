@@ -67,10 +67,10 @@ There are **two**.
 - Reverse-chronological list of saved trips. Each row: date, pickup → destination labels,
   km, duration, suggested vs. charged.
 - A header with totals for the current month: trip count, total km, total charged.
-- Tap a row to edit charged amount / note, delete, or repeat pins on the map.
-- Export CSV.
+- Tap a row for trip detail (rate card, note, charged); from there show the saved route
+  on the map, repeat (re-quote), edit, or delete.
 
-No charts or history filters in v1.
+No charts, CSV export, or history filters in v1. Backup is the SQLite file.
 
 ---
 
@@ -172,7 +172,6 @@ Small enough to list completely.
 | `POST` | `/api/trips` | save a trip |
 | `PATCH` | `/api/trips/{id}` | edit `actual_charged` / `note` |
 | `DELETE` | `/api/trips/{id}` | delete a trip |
-| `GET` | `/api/trips.csv` | export everything |
 | `GET` | `/api/places` | list saved places |
 | `POST` | `/api/places` | add one |
 | `DELETE` | `/api/places/{id}` | remove one |
@@ -206,7 +205,7 @@ No in-app auth: bind to `127.0.0.1` locally; on a VPS use reverse-proxy Basic Au
 - [x] Route line + distance/duration from ORS
 - [x] Suggested fare matches the config rate card
 - [x] Save trip with actual charged amount
-- [x] History with month totals; CSV export; repeat / edit
+- [x] History with month totals; trip detail; show on map / repeat / edit
 - [x] Data survives server restart (SQLite)
 - [x] Usable one-handed in a phone browser
 - [x] `config.yaml` + `go run .` (or one binary) is enough to run

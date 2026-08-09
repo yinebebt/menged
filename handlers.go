@@ -2,23 +2,18 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
-// Service-area bounds (roughly Ethiopia). Out-of-range pins fail fast.
-const (
-	minLat, maxLat = 3.0, 15.5
-	minLng, maxLng = 32.5, 48.5
-	cacheTTL       = 5 * time.Minute
-)
+const maxJSONBody = 1 << 20 // 1 MiB
 
 // Server is the HTTP API and static-file front for menged.
 type Server struct {
@@ -26,22 +21,11 @@ type Server struct {
 	store    *Store
 	router   Router
 	geocoder Geocoder
-
-	mu    sync.Mutex
-	cache map[string]cachedRoute
 }
 
-type cachedRoute struct {
-	route Route
-	at    time.Time
-}
-
-// NewServer wires config, store, router, and optional geocoder into an HTTP server.
+// NewServer wires config, store, router, and geocoder into an HTTP server.
 func NewServer(cfg *Config, store *Store, router Router, geocoder Geocoder) *Server {
-	return &Server{
-		cfg: cfg, store: store, router: router, geocoder: geocoder,
-		cache: map[string]cachedRoute{},
-	}
+	return &Server{cfg: cfg, store: store, router: router, geocoder: geocoder}
 }
 
 func (s *Server) routes(static http.Handler) http.Handler {
@@ -57,15 +41,21 @@ func (s *Server) routes(static http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/trips", s.saveTrip)
 	mux.HandleFunc("PATCH /api/trips/{id}", s.editTrip)
 	mux.HandleFunc("DELETE /api/trips/{id}", s.deleteTrip)
-	mux.HandleFunc("GET /api/trips.csv", s.exportCSV)
 
 	mux.HandleFunc("GET /api/places", s.listPlaces)
 	mux.HandleFunc("POST /api/places", s.addPlace)
 	mux.HandleFunc("DELETE /api/places/{id}", s.deletePlace)
 
-	mux.Handle("GET /", static)
+	mux.Handle("GET /", noCache(static))
 
 	return mux
+}
+
+func noCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -74,9 +64,8 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 // Default MapLibre camera for Addis Ababa.
 var (
-	addisCenter = Point{Lat: 8.9800, Lng: 38.7900}
-	addisZoom   = 12.0
-	// Keep pan area over road-dense Greater Addis (avoid empty SW fringe).
+	addisCenter    = Point{Lat: 8.9800, Lng: 38.7900}
+	addisZoom      = 12.0
 	addisMaxBounds = [][]float64{{38.65, 8.85}, {38.95, 9.12}} // SW, NE
 )
 
@@ -138,8 +127,8 @@ func (s *Server) reverse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := Point{Lat: lat, Lng: lng}
-	if p.Lat < minLat || p.Lat > maxLat || p.Lng < minLng || p.Lng > maxLng {
-		writeError(w, http.StatusBadRequest, "point outside the service area")
+	if !InServiceArea(p) {
+		writeError(w, http.StatusBadRequest, ErrOutsideArea.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
@@ -169,7 +158,7 @@ type estimateResponse struct {
 
 func (s *Server) estimate(w http.ResponseWriter, r *http.Request) {
 	var req estimateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
 	}
@@ -177,24 +166,24 @@ func (s *Server) estimate(w http.ResponseWriter, r *http.Request) {
 		req.Multiplier = 1
 	}
 	for _, p := range []Point{req.Pickup, req.Dest} {
-		if p.Lat < minLat || p.Lat > maxLat || p.Lng < minLng || p.Lng > maxLng {
-			writeError(w, http.StatusBadRequest, "point outside the service area")
+		if !InServiceArea(p) {
+			writeError(w, http.StatusBadRequest, ErrOutsideArea.Error())
 			return
 		}
 	}
 
-	route, err := s.cachedOrLiveRoute(r, req.Pickup, req.Dest)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	route, err := s.router.Route(ctx, req.Pickup, req.Dest)
 	if err != nil {
 		slog.Error("routing failed", "err", err,
 			"pickup", fmt.Sprintf("%.5f,%.5f", req.Pickup.Lat, req.Pickup.Lng),
 			"dest", fmt.Sprintf("%.5f,%.5f", req.Dest.Lat, req.Dest.Lng))
-		msg := "routing failed — try again"
-		if strings.Contains(err.Error(), "Could not find routable point") {
-			msg = "no road near that pin — move it closer to a street"
-			writeError(w, http.StatusUnprocessableEntity, msg)
+		if errors.Is(err, ErrUnroutable) {
+			writeError(w, http.StatusUnprocessableEntity, ErrUnroutable.Error())
 			return
 		}
-		writeError(w, http.StatusBadGateway, msg)
+		writeError(w, http.StatusBadGateway, "routing failed — try again")
 		return
 	}
 
@@ -211,41 +200,6 @@ func (s *Server) estimate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// cachedOrLiveRoute returns a cached route when the same ~10 m–rounded
-// coordinate pair was requested within cacheTTL.
-func (s *Server) cachedOrLiveRoute(r *http.Request, from, to Point) (Route, error) {
-	key := fmt.Sprintf("%.4f,%.4f|%.4f,%.4f", from.Lat, from.Lng, to.Lat, to.Lng)
-
-	s.mu.Lock()
-	if c, ok := s.cache[key]; ok && time.Since(c.at) < cacheTTL {
-		s.mu.Unlock()
-		return c.route, nil
-	}
-	s.mu.Unlock()
-
-	var route Route
-	var err error
-	ctx := r.Context()
-	for attempt := 0; attempt < 2; attempt++ {
-		route, err = s.router.Route(ctx, from, to)
-		if err == nil || ctx.Err() != nil || !isRetryableRoute(err) {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if err != nil {
-		return Route{}, err
-	}
-
-	s.mu.Lock()
-	if len(s.cache) > 500 {
-		clear(s.cache)
-	}
-	s.cache[key] = cachedRoute{route: route, at: time.Now()}
-	s.mu.Unlock()
-	return route, nil
-}
-
 func (s *Server) listTrips(w http.ResponseWriter, r *http.Request) {
 	trips, err := s.store.ListTrips()
 	if err != nil {
@@ -257,18 +211,26 @@ func (s *Server) listTrips(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) saveTrip(w http.ResponseWriter, r *http.Request) {
 	var t Trip
-	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+	if err := decodeJSON(w, r, &t); err != nil {
 		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
 	}
-	if t.DistanceKM <= 0 || t.SuggestedFare <= 0 {
+	if t.DistanceKM <= 0 || t.DurationMin < 0 || t.SuggestedFare <= 0 {
 		writeError(w, http.StatusBadRequest, "trip has no estimate")
 		return
+	}
+	for _, p := range []Point{
+		{Lat: t.PickupLat, Lng: t.PickupLng},
+		{Lat: t.DestLat, Lng: t.DestLng},
+	} {
+		if !InServiceArea(p) {
+			writeError(w, http.StatusBadRequest, ErrOutsideArea.Error())
+			return
+		}
 	}
 	if t.Multiplier <= 0 {
 		t.Multiplier = 1
 	}
-	// Snapshot the rate card used for this trip.
 	rates := s.cfg.Rates()
 	t.RateBase, t.RatePerKM, t.RatePerMin = rates.BaseFare, rates.PerKM, rates.PerMinute
 
@@ -292,8 +254,12 @@ func (s *Server) editTrip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var patch tripPatch
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	if err := decodeJSON(w, r, &patch); err != nil {
 		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	if patch.ActualCharged == nil && patch.Note == nil {
+		writeError(w, http.StatusBadRequest, "nothing to update")
 		return
 	}
 	ok, err := s.store.UpdateTrip(id, patch.ActualCharged, patch.Note)
@@ -326,34 +292,6 @@ func (s *Server) deleteTrip(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) exportCSV(w http.ResponseWriter, r *http.Request) {
-	trips, err := s.store.ListTrips()
-	if err != nil {
-		s.serverError(w, "export csv", err)
-		return
-	}
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="menged-trips.csv"`)
-
-	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"created_at", "pickup", "pickup_lat", "pickup_lng",
-		"destination", "dest_lat", "dest_lng", "distance_km", "duration_min",
-		"suggested_fare", "actual_charged", "multiplier",
-		"rate_base", "rate_per_km", "rate_per_min", "note"})
-	f := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
-	for _, t := range trips {
-		charged := ""
-		if t.ActualCharged != nil {
-			charged = f(*t.ActualCharged)
-		}
-		_ = cw.Write([]string{t.CreatedAt, t.PickupLabel, f(t.PickupLat), f(t.PickupLng),
-			t.DestLabel, f(t.DestLat), f(t.DestLng), f(t.DistanceKM), f(t.DurationMin),
-			f(t.SuggestedFare), charged, f(t.Multiplier),
-			f(t.RateBase), f(t.RatePerKM), f(t.RatePerMin), t.Note})
-	}
-	cw.Flush()
-}
-
 func (s *Server) listPlaces(w http.ResponseWriter, r *http.Request) {
 	places, err := s.store.ListPlaces()
 	if err != nil {
@@ -365,7 +303,7 @@ func (s *Server) listPlaces(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) addPlace(w http.ResponseWriter, r *http.Request) {
 	var p Place
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+	if err := decodeJSON(w, r, &p); err != nil {
 		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
 	}
@@ -374,8 +312,8 @@ func (s *Server) addPlace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "label is required")
 		return
 	}
-	if p.Lat < minLat || p.Lat > maxLat || p.Lng < minLng || p.Lng > maxLng {
-		writeError(w, http.StatusBadRequest, "point outside the service area")
+	if !InServiceArea(Point{Lat: p.Lat, Lng: p.Lng}) {
+		writeError(w, http.StatusBadRequest, ErrOutsideArea.Error())
 		return
 	}
 	if err := s.store.InsertPlace(&p); err != nil {
@@ -407,10 +345,23 @@ func (s *Server) deletePlace(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// serverError logs op and responds with HTTP 500.
 func (s *Server) serverError(w http.ResponseWriter, op string, err error) {
 	slog.Error(op, "err", err)
-	writeError(w, http.StatusInternalServerError, err.Error())
+	writeError(w, http.StatusInternalServerError, "internal error")
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+	dec := json.NewDecoder(r.Body)
+	err := dec.Decode(dst)
+	if err == nil {
+		return nil
+	}
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("body too large")
+	}
+	return err
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
