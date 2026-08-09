@@ -178,16 +178,30 @@ html, body {
 .chips::-webkit-scrollbar { display: none; }
 .chip {
   flex: 0 0 auto;
-  border: 0;
+  display: flex;
+  align-items: center;
   background: var(--card);
-  color: var(--text);
   border-radius: 999px;
-  padding: 7px 14px;
-  font-size: 14px;
   box-shadow: 0 2px 8px rgba(0,0,0,.35);
-  cursor: pointer;
+  overflow: hidden;
 }
-.chip:active { background: var(--card-2); }
+.chip-use, .chip-x {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 7px 12px;
+}
+.chip-use { padding-right: 4px; }
+.chip-x {
+  padding-left: 4px;
+  padding-right: 10px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+}
+.chip-use:active, .chip-x:active { background: var(--card-2); }
 
 /* recenter FAB */
 .map-fab {
@@ -467,6 +481,7 @@ html, body {
 }
 .sheet h2 { font-size: 17px; }
 .sheet label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
+.sheet-caption { display: block; white-space: nowrap; }
 .sheet input {
   background: var(--card-2);
   border: 1px solid transparent;
@@ -508,7 +523,6 @@ html, body {
   padding: 10px 12px;
 }
 .panel header .brand { flex: 1; }
-.panel header a { color: var(--accent); font-size: 14px; text-decoration: none; }
 
 .totals {
   display: flex;
@@ -546,6 +560,53 @@ html, body {
   color: var(--muted);
   font-size: 13px;
   padding-top: 4px;
+}
+
+.trip-detail {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 20px calc(env(safe-area-inset-bottom, 0px) + 20px);
+}
+.trip-detail-route {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-bottom: 6px;
+}
+.trip-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 16px;
+  margin: 18px 0;
+}
+.trip-detail-grid dt {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+.trip-detail-grid dd {
+  margin: 0;
+  font-size: 15px;
+}
+.trip-detail-note {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  background: var(--card);
+  border-radius: 10px;
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+.trip-detail .trip-actions {
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.trip-detail .trip-actions button {
+  flex: 1 1 auto;
+  min-width: calc(50% - 4px);
+  padding: 10px 12px;
+}
+.trip-detail .trip-actions .danger {
+  background: var(--card-2) !important;
 }
 
 .muted { color: var(--muted); }
