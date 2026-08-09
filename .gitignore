@@ -1,0 +1,22 @@
+# binary
+/menged
+
+# local config and secrets
+config.yaml
+.env
+
+# sqlite database and backups
+*.db
+*.db-shm
+*.db-wal
+/backups/
+
+# osm / osrm data (large, regenerated from geofabrik)
+/data/
+*.osm.pbf
+*.osrm*
+
+# editors / os
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,22 @@
+fare:
+  currency:         ETB
+  base_fare:        100
+  price_per_km:     70
+  price_per_minute: 10     # 0 to ignore time
+  minimum_fare:     250
+  rounding:         5      # nearest multiple for the final fare
+
+routing:
+  provider: ors            # or: osrm (self-hosted)
+  api_key:  ${ORS_API_KEY} # from env, never commit a real key
+  base_url: ""             # empty → https://api.heigit.org/openrouteservice
+
+geocoding:
+  provider: pelias         # pelias | off
+  pelias_base_url: ""      # empty → https://api.heigit.org/pelias/v1
+
+server:
+  # Local / behind a reverse proxy: 127.0.0.1:8080
+  listen:     127.0.0.1:8080
+  db_path:    ./menged.db
+  map_style:  https://tiles.openfreemap.org/styles/liberty

@@ -1,0 +1,17 @@
+{
+  "name": "menged — መንገድ",
+  "short_name": "menged",
+  "description": "Personal trip and fare calculator for Addis Ababa",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101418",
+  "theme_color": "#101418",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
