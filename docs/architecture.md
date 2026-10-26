@@ -139,7 +139,7 @@ In rough order of preference:
 3. **A real login** — only if a second person ever uses it; see [roadmap.md](roadmap.md).
 
 Do not put it on a public IP with no auth. The routing quota is attached to your key.
-Startup warns if listen is non-loopback.
+Startup refuses a non-loopback listen unless you pass `-allow-public-listen` (which still logs a warning).
 
 ---
 

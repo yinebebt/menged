@@ -17,6 +17,7 @@ geocoding:
 
 server:
   # Local / behind a reverse proxy: 127.0.0.1:8080
+  # Non-loopback binds are refused unless you pass -allow-public-listen.
   listen:     127.0.0.1:8080
   db_path:    ./menged.db
   map_style:  https://tiles.openfreemap.org/styles/liberty

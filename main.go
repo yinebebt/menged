@@ -22,11 +22,20 @@ var schemaSQL string
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
+	allowPublicListen := flag.Bool("allow-public-listen", false, "allow binding a non-loopback address (unsafe without a reverse proxy)")
 	flag.Parse()
 
 	cfg, err := LoadConfig(*configPath)
 	if err != nil {
 		fatal("config", err)
+	}
+
+	if !loopbackListen(cfg.Server.Listen) {
+		if !*allowPublicListen {
+			fatal("listen", errors.New("refusing non-loopback listen "+cfg.Server.Listen+"; bind 127.0.0.1 or pass -allow-public-listen"))
+		}
+		slog.Warn("listening on a non-loopback address; this process has no in-app auth",
+			"addr", cfg.Server.Listen)
 	}
 
 	store, err := OpenStore(cfg.Server.DBPath, schemaSQL)

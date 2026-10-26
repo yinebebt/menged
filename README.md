@@ -33,7 +33,7 @@ Health: `GET /api/health` → `{"status":"ok"}`.
 
 ## Deploy (VPS)
 
-Keep menged on loopback; put TLS + **Basic Auth** on the reverse proxy (no in-app tokens).
+Keep menged on loopback; put TLS + **Basic Auth** on the reverse proxy (no in-app tokens). The process refuses a non-loopback listen unless you pass `-allow-public-listen`.
 
 1. `go build -o menged .` — ship binary + `config.yaml`; `ORS_API_KEY` in the environment only.
 2. `server.listen: 127.0.0.1:8080`
