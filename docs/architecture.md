@@ -69,8 +69,10 @@ ride-sharing backend and none of them are load-bearing here.
 Quotes are public: the estimate screen, sharing and the live meter need no account.
 Trips and saved places belong to a user, so those endpoints need a session.
 
-- Users are added on the server with `menged -user NAME` (password from stdin; the same
-  command resets a password and signs that user out). There is no signup.
+- Anyone can create an account from the sign-in sheet (`POST /api/signup`, rate-limited
+  like login) and is signed in straight away; `server.signup: false` closes it. There is
+  no email, so a forgotten password is reset on the server with `menged -user NAME`
+  (password from stdin), which also signs that user out everywhere.
 - Passwords are bcrypt hashes. Sign-in sets an `HttpOnly`, `SameSite=Lax` cookie
   (`Secure` behind TLS) holding a random token; only its SHA-256 is stored. Sessions
   last 90 days and are extended when used, so a phone in daily use stays signed in.

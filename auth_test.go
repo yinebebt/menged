@@ -190,3 +190,43 @@ func TestAuthHTTP(t *testing.T) {
 		t.Fatalf("trips after logout: %d", rec.Code)
 	}
 }
+
+func TestSignup(t *testing.T) {
+	s, _ := newTestStore(t) // "driver" exists
+	cfg := &Config{Server: ServerConfig{Signup: true}}
+	h := NewServer(cfg, s, nil, nil).routes(http.NotFoundHandler())
+	c := &client{t: t, h: h}
+
+	cases := []struct {
+		name, body string
+		want       int
+	}{
+		{"taken, any case", `{"username":"DRIVER","password":"long enough"}`, http.StatusConflict},
+		{"bad username", `{"username":"has space","password":"long enough"}`, http.StatusBadRequest},
+		{"short password", `{"username":"abebe","password":"short"}`, http.StatusBadRequest},
+		{"password over bcrypt's limit", `{"username":"abebe","password":"` + strings.Repeat("x", 73) + `"}`, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		if rec := c.do("POST", "/api/signup", tc.body); rec.Code != tc.want {
+			t.Fatalf("%s: %d %s", tc.name, rec.Code, rec.Body)
+		}
+	}
+	if c.cookie != nil {
+		t.Fatal("a failed sign-up must not sign in")
+	}
+
+	if rec := c.do("POST", "/api/signup", `{"username":" abebe ","password":"long enough"}`); rec.Code != http.StatusOK {
+		t.Fatalf("signup: %d %s", rec.Code, rec.Body)
+	}
+	if rec := c.do("GET", "/api/me", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"abebe"`) {
+		t.Fatalf("signed in after sign-up: %d %s", rec.Code, rec.Body)
+	}
+	if _, err := s.Authenticate("abebe", "long enough"); err != nil {
+		t.Fatalf("new account can sign in: %v", err)
+	}
+
+	cfg.Server.Signup = false
+	if rec := c.do("POST", "/api/signup", `{"username":"closed","password":"long enough"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("closed sign-up: %d", rec.Code)
+	}
+}

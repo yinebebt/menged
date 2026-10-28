@@ -1,4 +1,4 @@
--- Users are added from the command line (menged -user NAME); there is no signup.
+-- Users sign up in the app; menged -user NAME resets a password from the server.
 CREATE TABLE IF NOT EXISTS users (
     id              INTEGER PRIMARY KEY,
     username        TEXT    NOT NULL UNIQUE COLLATE NOCASE,

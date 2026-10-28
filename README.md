@@ -41,7 +41,7 @@ Keep menged on loopback behind a TLS reverse proxy. The process refuses a non-lo
 1. `go build -o menged .` — ship binary + `config.yaml`; `ORS_API_KEY` in the environment only.
 2. `server.listen: 127.0.0.1:8080`
 3. nginx/Caddy: HTTPS → `127.0.0.1:8080`, setting `X-Forwarded-Proto`; rate-limit `/api/login` and the routing endpoints.
-4. Add yourself: `./menged -user NAME` (asks for a password; run it again to reset one).
+4. Create your account in the app (sign-in sheet → "Create an account"). `server.signup: false` closes sign-up; `./menged -user NAME` resets a forgotten password, or adds a user while sign-up is closed.
 5. systemd (or similar). Probe: `curl -fsS https://your.host/api/health`
 6. Backup `menged.db` (and `-wal` / `-shm` if present)
 
@@ -69,5 +69,5 @@ Details: [architecture.md §5](docs/architecture.md#5-exposing-it-beyond-localho
 
 ## Non-goals
 
-Matching, dispatch, signup or per-driver rate cards, passenger apps, in-app payments, surge
+Matching, dispatch, per-driver rate cards, passenger apps, in-app payments, surge
 automation, microservices. See [docs/roadmap.md](docs/roadmap.md).

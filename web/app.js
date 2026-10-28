@@ -6,6 +6,7 @@ const state = {
   cfg: null,
   user: null,         // {username} when signed in
   afterLogin: null,   // what to carry on with once the sign-in sheet succeeds
+  signingUp: false,   // the sheet is in "create an account" mode
   pickup: null,       // {lat, lng, label?}
   dest: null,
   stop: null,         // optional point between pickup and dest
@@ -949,19 +950,43 @@ function requireUser(then, reason) {
   if (state.user) return then();
   state.afterLogin = then;
   $('login-reason').textContent = reason || 'Your session ended. Sign in again to carry on.';
-  $('login-error').hidden = true;
-  $('login-password').value = '';
+  setSignupMode(false);
   $('sheet-login').hidden = false;
   const field = $('login-username').value ? 'login-password' : 'login-username';
   $(field).focus();
 }
 
+// setSignupMode switches the sheet between signing in and creating an account.
+function setSignupMode(on) {
+  state.signingUp = on;
+  $('login-title').textContent = on ? 'Create an account' : 'Sign in';
+  $('btn-login').textContent = on ? 'Create account' : 'Sign in';
+  $('login-hint').hidden = !on;
+  $('login-repeat-wrap').hidden = !on;
+  $('login-password').autocomplete = on ? 'new-password' : 'current-password';
+  $('login-switch').hidden = !(state.cfg && state.cfg.signup);
+  $('login-switch-text').textContent = on ? 'Have an account?' : 'New here?';
+  $('btn-login-switch').textContent = on ? 'Sign in' : 'Create an account';
+  $('login-error').hidden = true;
+  $('login-password').value = '';
+  $('login-repeat').value = '';
+}
+
+function loginError(msg) {
+  $('login-error').textContent = msg;
+  $('login-error').hidden = false;
+}
+
 async function signIn(e) {
   e.preventDefault();
+  const signup = state.signingUp;
+  if (signup && $('login-password').value !== $('login-repeat').value) {
+    return loginError('The passwords don\u2019t match.');
+  }
   const btn = $('btn-login');
   btn.disabled = true;
   try {
-    setUser(await api('/api/login', {
+    setUser(await api(signup ? '/api/signup' : '/api/login', {
       method: 'POST',
       body: JSON.stringify({
         username: $('login-username').value.trim(),
@@ -969,14 +994,14 @@ async function signIn(e) {
       }),
     }));
     $('sheet-login').hidden = true;
-    $('login-password').value = '';
+    setSignupMode(false);
+    if (signup) showToast('Account created — welcome, ' + state.user.username);
     await loadPlaces();
     const then = state.afterLogin;
     state.afterLogin = null;
     if (then) then();
   } catch (err) {
-    $('login-error').textContent = err.message;
-    $('login-error').hidden = false;
+    loginError(err.message);
   } finally {
     btn.disabled = false;
   }
@@ -1576,6 +1601,10 @@ $('btn-save-confirm').onclick = saveTrip;
 
 $('btn-history').onclick = () => openHistory();
 $('login-form').addEventListener('submit', signIn);
+$('btn-login-switch').onclick = () => {
+  setSignupMode(!state.signingUp);
+  $('login-username').focus();
+};
 $('btn-login-cancel').onclick = () => {
   state.afterLogin = null;
   $('sheet-login').hidden = true;

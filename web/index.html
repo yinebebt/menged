@@ -149,7 +149,7 @@
 <!-- sign-in sheet: opened by anything that needs your account, then carries on -->
 <div id="sheet-login" class="overlay" hidden>
   <form class="sheet" id="login-form" autocomplete="on">
-    <h2>Sign in</h2>
+    <h2 id="login-title">Sign in</h2>
     <div class="muted" id="login-reason">Your trips and saved places are private to you.</div>
     <label>
       <span class="sheet-caption">Username</span>
@@ -157,14 +157,22 @@
              autocapitalize="none" autocorrect="off" spellcheck="false" required>
     </label>
     <label>
-      <span class="sheet-caption">Password</span>
+      <span class="sheet-caption">Password <span class="muted" id="login-hint" hidden>at least 8 characters</span></span>
       <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <label id="login-repeat-wrap" hidden>
+      <span class="sheet-caption">Password again</span>
+      <input id="login-repeat" name="password-repeat" type="password" autocomplete="new-password">
     </label>
     <p id="login-error" class="login-error" hidden></p>
     <div class="sheet-actions">
       <button type="button" id="btn-login-cancel">Cancel</button>
       <button type="submit" id="btn-login" class="primary">Sign in</button>
     </div>
+    <p class="login-switch muted" id="login-switch" hidden>
+      <span id="login-switch-text">New here?</span>
+      <button type="button" class="link-btn" id="btn-login-switch">Create an account</button>
+    </p>
   </form>
 </div>
 

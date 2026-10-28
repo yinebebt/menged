@@ -38,6 +38,7 @@ func (s *Server) routes(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/geocode", s.geocode)
 	mux.HandleFunc("GET /api/reverse", s.reverse)
 
+	mux.HandleFunc("POST /api/signup", s.signup)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.HandleFunc("GET /api/me", s.requireUser(s.me))
@@ -83,6 +84,7 @@ type configResponse struct {
 	MapCenter    Point       `json:"map_center"`
 	MapZoom      float64     `json:"map_zoom"`
 	MapMaxBounds [][]float64 `json:"map_max_bounds"`
+	Signup       bool        `json:"signup"`
 }
 
 func (s *Server) config(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +95,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		MapCenter:    addisCenter,
 		MapZoom:      addisZoom,
 		MapMaxBounds: addisMaxBounds,
+		Signup:       s.cfg.Server.Signup,
 	})
 }
 

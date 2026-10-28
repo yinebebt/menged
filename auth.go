@@ -14,9 +14,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Sign-in is in the app: users are added from the command line, and a session
-// cookie keeps a phone signed in for months. Quotes stay public; trips and saved
-// places belong to a user.
+// Sign-in is in the app: anyone can create an account (unless server.signup is
+// off), and a session cookie keeps a phone signed in for months. Quotes stay
+// public; trips and saved places belong to a user. menged -user NAME resets a
+// forgotten password from the server.
 
 const (
 	sessionCookie = "menged_session"
@@ -25,12 +26,16 @@ const (
 	// so a phone in daily use never has to sign in again.
 	sessionRenewBelow = 60 * 24 * time.Hour
 	minPasswordLen    = 8
+	maxPasswordLen    = 72 // bcrypt's limit
 )
 
 var (
 	errBadLogin        = errors.New("wrong username or password")
 	errInvalidUsername = errors.New("username must be 1–32 letters, digits, '.', '-' or '_'")
 	errShortPassword   = errors.New("password must be at least 8 characters")
+	errLongPassword    = errors.New("password must be at most 72 bytes")
+	errUsernameTaken   = errors.New("that username is taken")
+	errSignupClosed    = errors.New("sign-up is closed; ask the owner for an account")
 )
 
 // User is a signed-in driver.
@@ -57,18 +62,45 @@ func validUsername(name string) bool {
 	return true
 }
 
+// hashPassword checks username and password against the rules and returns the
+// bcrypt hash to store.
+func hashPassword(username, password string) (string, error) {
+	switch {
+	case !validUsername(username):
+		return "", errInvalidUsername
+	case len(password) < minPasswordLen:
+		return "", errShortPassword
+	case len(password) > maxPasswordLen:
+		return "", errLongPassword
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(hash), err
+}
+
+// CreateUser adds a new user. Usernames are unique regardless of case.
+func (s *Store) CreateUser(username, password string) (*User, error) {
+	hash, err := hashPassword(username, password)
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.db.Exec(`INSERT INTO users (username, password_hash, created_at) VALUES (?,?,?)`,
+		username, hash, now())
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return nil, errUsernameTaken
+		}
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	return &User{ID: id, Username: username}, err
+}
+
 // SetPassword creates username, or resets its password if it exists. A reset
 // signs the user out everywhere.
 func (s *Store) SetPassword(username, password string) (created bool, err error) {
-	if !validUsername(username) {
-		return false, errInvalidUsername
-	}
-	if len(password) < minPasswordLen {
-		return false, errShortPassword
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := hashPassword(username, password)
 	if err != nil {
-		return false, err // includes bcrypt.ErrPasswordTooLong (over 72 bytes)
+		return false, err
 	}
 	// One transaction, so a reset can't change the password yet leave old sessions valid.
 	tx, err := s.db.Begin()
@@ -76,7 +108,7 @@ func (s *Store) SetPassword(username, password string) (created bool, err error)
 		return false, err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE users SET password_hash = ? WHERE username = ?`, string(hash), username)
+	res, err := tx.Exec(`UPDATE users SET password_hash = ? WHERE username = ?`, hash, username)
 	if err != nil {
 		return false, err
 	}
@@ -87,7 +119,7 @@ func (s *Store) SetPassword(username, password string) (created bool, err error)
 		}
 	} else {
 		if _, err := tx.Exec(`INSERT INTO users (username, password_hash, created_at) VALUES (?,?,?)`,
-			username, string(hash), now()); err != nil {
+			username, hash, now()); err != nil {
 			return false, err
 		}
 		created = true
@@ -228,6 +260,42 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+// startSession signs u in on this browser and answers with the user.
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *User) {
+	token, expires, err := s.store.CreateSession(u.ID)
+	if err != nil {
+		s.serverError(w, "create session", err)
+		return
+	}
+	http.SetCookie(w, newSessionCookie(r, token, expires))
+	writeJSON(w, http.StatusOK, u)
+}
+
+func (s *Server) signup(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.Server.Signup {
+		writeError(w, http.StatusForbidden, errSignupClosed.Error())
+		return
+	}
+	var req loginRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	u, err := s.store.CreateUser(strings.TrimSpace(req.Username), req.Password)
+	switch {
+	case errors.Is(err, errUsernameTaken):
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	case errors.Is(err, errInvalidUsername), errors.Is(err, errShortPassword), errors.Is(err, errLongPassword):
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	case err != nil:
+		s.serverError(w, "signup", err)
+		return
+	}
+	s.startSession(w, r, u)
+}
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -243,13 +311,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "login", err)
 		return
 	}
-	token, expires, err := s.store.CreateSession(u.ID)
-	if err != nil {
-		s.serverError(w, "create session", err)
-		return
-	}
-	http.SetCookie(w, newSessionCookie(r, token, expires))
-	writeJSON(w, http.StatusOK, u)
+	s.startSession(w, r, u)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {

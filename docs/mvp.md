@@ -168,11 +168,12 @@ Small enough to list completely.
 |--------|------|---------|
 | `GET` | `/` | serves the single-page app (embedded static files) |
 | `GET` | `/api/health` | liveness probe (`{"status":"ok"}`) |
-| `GET` | `/api/config` | fare rates, map style/camera, `geocode` flag |
+| `GET` | `/api/config` | fare rates, map style/camera, `geocode` and `signup` flags |
 | `POST` | `/api/estimate` | `{pickup:{lat,lng}, stop?:{lat,lng}, dest:{lat,lng}, waiting_min?, multiplier?}` → `{distance_km, duration_min, geometry, fare, breakdown}` |
 | `POST` | `/api/measure` | `{track:[{lat,lng,t,acc}], multiplier?, route?}` → measured `{distance_km, duration_min, waiting_min, rough, method, geometry, track, start, end, fare, breakdown}` |
 | `GET` | `/api/geocode` | `?q=&lat=&lng=` → place hits (when geocoding configured) |
 | `GET` | `/api/reverse` | `?lat=&lng=` → `{label}` for a pin |
+| `POST` | `/api/signup` | `{username, password}` → creates the account, then as login (403 when `server.signup` is off) |
 | `POST` | `/api/login` | `{username, password}` → `{username}` and a session cookie |
 | `POST` | `/api/logout` | ends the session |
 | `GET` | `/api/me` | 🔒 `{username}`, or 401 when signed out |
@@ -198,7 +199,7 @@ and [§5](architecture.md#5-exposing-it-beyond-localhost).
 ## 7. Explicitly not in v1
 
 - More than one planned stop (unplanned stops are captured by trip recording)
-- Signup, password reset, or per-driver rate cards (users are added from the CLI)
+- Password reset in the app, or per-driver rate cards (a reset is a CLI command on the server)
 - Passenger-facing anything; payments, receipts, SMS
 - Automatic surge / time-of-day pricing (multiplier stays manual)
 - Offline routing or offline map tiles

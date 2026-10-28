@@ -22,3 +22,4 @@ server:
   listen:     127.0.0.1:8080
   db_path:    ./menged.db
   map_style:  https://tiles.openfreemap.org/styles/liberty
+  signup:     true   # anyone can create an account from the sign-in sheet; false closes it

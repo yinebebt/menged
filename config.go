@@ -40,11 +40,12 @@ type GeocodingConfig struct {
 	PeliasBaseURL string `yaml:"pelias_base_url"` // empty → https://api.heigit.org/pelias/v1
 }
 
-// ServerConfig is listen address, database path, and map style.
+// ServerConfig is listen address, database path, map style, and whether sign-up is open.
 type ServerConfig struct {
 	Listen   string `yaml:"listen"`
 	DBPath   string `yaml:"db_path"`
 	MapStyle string `yaml:"map_style"`
+	Signup   bool   `yaml:"signup"` // anyone can create an account; default true
 }
 
 // LoadConfig reads path, expands ${ENV} references, and applies defaults.
@@ -63,6 +64,7 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.Server.Listen = "127.0.0.1:8080"
 	cfg.Server.DBPath = "./menged.db"
 	cfg.Server.MapStyle = "https://tiles.openfreemap.org/styles/liberty"
+	cfg.Server.Signup = true
 
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
