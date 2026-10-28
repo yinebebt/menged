@@ -31,9 +31,9 @@ type PlaceHit struct {
 	Lng   float64 `json:"lng"`
 }
 
-// Router computes a driving route.
+// Router computes a driving route through pts in order: pickup, any stops, destination.
 type Router interface {
-	Route(ctx context.Context, from, to Point) (Route, error)
+	Route(ctx context.Context, pts []Point) (Route, error)
 }
 
 // Geocoder resolves place names and reverse-labels coordinates.
@@ -122,8 +122,12 @@ type cachedRoute struct {
 	at    time.Time
 }
 
-func (c *cachedRouter) Route(ctx context.Context, from, to Point) (Route, error) {
-	key := fmt.Sprintf("%.4f,%.4f|%.4f,%.4f", from.Lat, from.Lng, to.Lat, to.Lng)
+func (c *cachedRouter) Route(ctx context.Context, pts []Point) (Route, error) {
+	parts := make([]string, len(pts))
+	for i, p := range pts {
+		parts[i] = fmt.Sprintf("%.4f,%.4f", p.Lat, p.Lng)
+	}
+	key := strings.Join(parts, "|")
 
 	c.mu.Lock()
 	if hit, ok := c.cache[key]; ok && time.Since(hit.at) < routeCacheTTL {
@@ -135,7 +139,7 @@ func (c *cachedRouter) Route(ctx context.Context, from, to Point) (Route, error)
 	var route Route
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
-		route, err = c.inner.Route(ctx, from, to)
+		route, err = c.inner.Route(ctx, pts)
 		if err == nil || ctx.Err() != nil || !isRetryableRoute(err) {
 			break
 		}

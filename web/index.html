@@ -47,11 +47,25 @@
         <button class="mini-btn" id="btn-star-pickup" title="Save as place" hidden>☆</button>
         <button class="mini-btn" id="btn-clear-pickup" title="Clear" hidden>✕</button>
       </div>
+      <div class="point-row" id="row-stop" hidden>
+        <span class="dot stop"></span>
+        <span class="point-label" id="label-stop">Tap the map to set the stop</span>
+        <button class="mini-btn" id="btn-star-stop" title="Save as place" hidden>☆</button>
+        <button class="mini-btn" id="btn-clear-stop" title="Remove stop">✕</button>
+      </div>
       <div class="point-row" id="row-dest">
         <span class="dot dest"></span>
         <span class="point-label" id="label-dest">…then the destination</span>
         <button class="mini-btn" id="btn-star-dest" title="Save as place" hidden>☆</button>
         <button class="mini-btn" id="btn-clear-dest" title="Clear" hidden>✕</button>
+      </div>
+      <div class="point-extras" id="point-extras" hidden>
+        <button type="button" class="mini-btn" id="btn-add-stop">+ Stop</button>
+        <label class="waiting" id="waiting-wrap" hidden>
+          Waiting
+          <input id="waiting-min" type="number" inputmode="numeric" min="0" max="600" step="1" value="0">
+          min
+        </label>
       </div>
       <div class="point-tools">
         <button class="icon-btn" id="btn-locate" title="Use my location">◎</button>
@@ -80,6 +94,7 @@
             <span class="fare-label">Suggested</span>
             <span class="fare" id="stat-fare">–</span>
           </div>
+          <button type="button" id="btn-share" class="btn-share" title="Share this quote">Share</button>
           <button id="btn-save" class="primary btn-save">Save</button>
         </div>
       </div>
@@ -125,6 +140,7 @@
       <div><dt>Duration</dt><dd id="detail-min"></dd></div>
       <div><dt>Suggested</dt><dd id="detail-suggested"></dd></div>
       <div><dt>Charged</dt><dd id="detail-charged"></dd></div>
+      <div id="detail-wait-row" hidden><dt>Waiting</dt><dd id="detail-wait"></dd></div>
       <div><dt>Multiplier</dt><dd id="detail-mult"></dd></div>
       <div><dt>Rate card</dt><dd id="detail-rates"></dd></div>
     </dl>

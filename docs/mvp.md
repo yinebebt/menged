@@ -80,12 +80,16 @@ Kept intentionally boring and fully configurable.
 
 ```
 raw   = base_fare + (distance_km × price_per_km) + (duration_min × price_per_minute)
+        + (waiting_min × price_per_waiting_minute)
 fare  = max(minimum_fare, raw) × multiplier
 fare  = round_to_nearest(fare, rounding)
 ```
 
 `price_per_minute` exists because a 6 km trip through Bole at 6 PM and the same trip at
 6 AM are not the same job. Set it to `0` to ignore time entirely.
+
+`waiting_min` is typed in by the driver (time stopped for the passenger or at a stop) and
+priced separately from driving time. Set `price_per_waiting_minute` to `0` to hide it.
 
 Example config (`config.yaml`, edited by hand, read at startup):
 
@@ -165,7 +169,7 @@ Small enough to list completely.
 | `GET` | `/` | serves the single-page app (embedded static files) |
 | `GET` | `/api/health` | liveness probe (`{"status":"ok"}`), open even when auth is on |
 | `GET` | `/api/config` | fare rates, map style/camera, `geocode` flag |
-| `POST` | `/api/estimate` | `{pickup:{lat,lng}, dest:{lat,lng}}` → `{distance_km, duration_min, geometry, fare, breakdown}` |
+| `POST` | `/api/estimate` | `{pickup:{lat,lng}, stop?:{lat,lng}, dest:{lat,lng}, waiting_min?, multiplier?}` → `{distance_km, duration_min, geometry, fare, breakdown}` |
 | `GET` | `/api/geocode` | `?q=&lat=&lng=` → place hits (when geocoding configured) |
 | `GET` | `/api/reverse` | `?lat=&lng=` → `{label}` for a pin |
 | `GET` | `/api/trips` | list, newest first |
@@ -188,7 +192,7 @@ No in-app auth: bind to `127.0.0.1` locally; on a VPS use reverse-proxy Basic Au
 ## 7. Explicitly not in v1
 
 - Live GPS tracking of the trip, or recording the route actually driven
-- Waiting time, stops, or multi-leg trips
+- More than one stop, or waiting measured from GPS (typed-in waiting and one stop are in)
 - Accounts, login, or more than one driver
 - Passenger-facing anything; payments, receipts, SMS
 - Automatic surge / time-of-day pricing (multiplier stays manual)

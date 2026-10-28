@@ -91,7 +91,11 @@ Note the trap the old ride-hailing backend fell into: it summed great-circle dis
 between raw GPS samples, which both undercounts (it ignores road curvature) and
 overcounts (GPS jitter at standstill adds phantom metres). Snap-to-road, or don't bother.
 
-### 2.4 Waiting time and stops
+### 2.4 Waiting time and stops — **typed-in waiting and one stop shipped**
+
+Shipped: a waiting-minutes field priced by `price_per_waiting_minute` (snapshotted on each
+trip as `rate_per_wait_min`), and one optional stop sent to the router as a waypoint.
+Still open: measuring waiting from GPS (below), which needs 2.3.
 
 **Trigger:** you've had enough trips where you waited, or made an intermediate stop, that
 the quoted fare was visibly wrong.
@@ -99,6 +103,12 @@ the quoted fare was visibly wrong.
 **Work:** waiting minutes as a field with its own rate; intermediate waypoints in the
 route request (every router supports them). Both are additive to the existing fare model —
 one more term in the same formula.
+
+If 2.3 records the trail, waiting can be measured instead of typed in. An earlier
+street-pickup meter did this: for each pair of GPS samples, if the speed between them is
+below a floor (a few km/h), count the elapsed time as waiting minutes; otherwise count the
+distance. Fare = km × per-km + waiting min × per-minute. Re-implement the idea. Do not copy
+that code.
 
 ---
 
@@ -113,7 +123,12 @@ GebetaMaps or self-hosted Photon only if you later need better local names / ind
 
 History rows reload both pins onto the estimate map.
 
-### 3.3 Quote sharing
+### 3.3 Quote sharing — **shipped**
+
+The Share button sends one line ("Bole → Ayat, 14.0 km, ~35 min, ETB 240") plus a Google
+Maps directions link for the same pins, through the phone's share sheet, or copies it where
+there is no share sheet. The receipt idea below is
+still open.
 
 **Trigger:** a passenger asks for the price in writing, or you want to confirm a booking
 in advance.

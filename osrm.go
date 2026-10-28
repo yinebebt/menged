@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 func newOSRMRouter(cfg *Config) (Router, error) {
@@ -32,9 +33,13 @@ type osrmRoute struct {
 	Geometry string  `json:"geometry"`
 }
 
-func (o *osrmRouter) Route(ctx context.Context, from, to Point) (Route, error) {
-	u := fmt.Sprintf("%s/route/v1/driving/%f,%f;%f,%f?%s",
-		o.baseURL, from.Lng, from.Lat, to.Lng, to.Lat,
+func (o *osrmRouter) Route(ctx context.Context, pts []Point) (Route, error) {
+	coords := make([]string, len(pts))
+	for i, p := range pts {
+		coords[i] = fmt.Sprintf("%f,%f", p.Lng, p.Lat)
+	}
+	u := fmt.Sprintf("%s/route/v1/driving/%s?%s",
+		o.baseURL, strings.Join(coords, ";"),
 		url.Values{"overview": {"full"}, "geometries": {"polyline"}}.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

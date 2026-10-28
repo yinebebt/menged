@@ -115,9 +115,9 @@ menged/
 
 ## 4. Estimate request flow
 
-1. Browser has both pins → `POST /api/estimate {pickup, dest}`.
+1. Browser has both pins → `POST /api/estimate {pickup, stop?, dest, waiting_min?}`.
 2. Handler validates coordinates via `InServiceArea` (Ethiopia-ish bbox in `geo.go`).
-3. `router.Route(from, to)` → distance, duration, encoded polyline. `NewRouter` wraps the
+3. `router.Route(points)` (pickup, optional stop, destination) → distance, duration, encoded polyline. `NewRouter` wraps the
    provider with an in-memory cache (~10 m–rounded keys, few minutes TTL) and one retry
    only on transient errors (not ORS 4xx / unroutable pins).
 4. `CalculateFare(...)` → amount + breakdown.

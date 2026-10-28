@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS trips (
     dest_label      TEXT,
     dest_lat        REAL    NOT NULL,
     dest_lng        REAL    NOT NULL,
+    stop_label      TEXT,                      -- optional intermediate stop
+    stop_lat        REAL,
+    stop_lng        REAL,
+    waiting_min     REAL    NOT NULL DEFAULT 0,
 
     distance_km     REAL    NOT NULL,
     duration_min    REAL    NOT NULL,
@@ -21,6 +25,7 @@ CREATE TABLE IF NOT EXISTS trips (
     rate_base       REAL    NOT NULL,
     rate_per_km     REAL    NOT NULL,
     rate_per_min    REAL    NOT NULL,
+    rate_per_wait_min REAL  NOT NULL DEFAULT 0,
 
     note            TEXT
 );

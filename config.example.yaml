@@ -3,6 +3,7 @@ fare:
   base_fare:        100
   price_per_km:     70
   price_per_minute: 10     # 0 to ignore time
+  price_per_waiting_minute: 5  # time stopped (waiting, stops); 0 hides the waiting field
   minimum_fare:     250
   rounding:         5      # nearest multiple for the final fare
 

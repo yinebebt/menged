@@ -21,6 +21,7 @@ type FareConfig struct {
 	BaseFare       float64 `yaml:"base_fare"`
 	PricePerKM     float64 `yaml:"price_per_km"`
 	PricePerMinute float64 `yaml:"price_per_minute"`
+	PricePerWait   float64 `yaml:"price_per_waiting_minute"`
 	MinimumFare    float64 `yaml:"minimum_fare"`
 	Rounding       float64 `yaml:"rounding"`
 }
@@ -76,6 +77,7 @@ func (c *Config) Rates() Rates {
 		BaseFare:    c.Fare.BaseFare,
 		PerKM:       c.Fare.PricePerKM,
 		PerMinute:   c.Fare.PricePerMinute,
+		PerWaitMin:  c.Fare.PricePerWait,
 		MinimumFare: c.Fare.MinimumFare,
 		Rounding:    c.Fare.Rounding,
 	}

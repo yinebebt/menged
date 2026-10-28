@@ -11,21 +11,24 @@ func TestCalculateFare(t *testing.T) {
 		MinimumFare: 80, Rounding: 5,
 	}
 	tests := []struct {
-		name                    string
-		km, min, mult, wantFare float64
-		rates                   Rates
-		wantMin                 bool
+		name                          string
+		km, min, wait, mult, wantFare float64
+		rates                         Rates
+		wantMin                       bool
 	}{
-		{"ordinary", 12.4, 28, 1, 255, std, false},
-		{"minimum", 1, 4, 1, 80, std, true},
-		{"minimum then multiplier", 1, 4, 1.5, 120, std, true},
-		{"multiplier then round", 12.4, 28, 1.25, 320, std, false},
-		{"no per-minute", 12.4, 28, 1, 200, Rates{BaseFare: 50, PerKM: 12, MinimumFare: 80, Rounding: 5}, false},
-		{"no rounding", 12.4, 28, 1, 254.8, Rates{BaseFare: 50, PerKM: 12, PerMinute: 2, MinimumFare: 80}, false},
+		{"ordinary", 12.4, 28, 0, 1, 255, std, false},
+		{"minimum", 1, 4, 0, 1, 80, std, true},
+		{"minimum then multiplier", 1, 4, 0, 1.5, 120, std, true},
+		{"multiplier then round", 12.4, 28, 0, 1.25, 320, std, false},
+		{"no per-minute", 12.4, 28, 0, 1, 200, Rates{BaseFare: 50, PerKM: 12, MinimumFare: 80, Rounding: 5}, false},
+		{"waiting", 12.4, 28, 10, 1, 285, Rates{BaseFare: 50, PerKM: 12, PerMinute: 2, PerWaitMin: 3, MinimumFare: 80, Rounding: 5}, false},
+		{"waiting ignored at zero rate", 12.4, 28, 10, 1, 255, std, false},
+		{"waiting lifts past minimum", 1, 4, 10, 1, 100, Rates{BaseFare: 50, PerKM: 12, PerMinute: 2, PerWaitMin: 3, MinimumFare: 80, Rounding: 5}, false},
+		{"no rounding", 12.4, 28, 0, 1, 254.8, Rates{BaseFare: 50, PerKM: 12, PerMinute: 2, MinimumFare: 80}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := CalculateFare(tt.km, tt.min, tt.mult, tt.rates)
+			got := CalculateFare(tt.km, tt.min, tt.wait, tt.mult, tt.rates)
 			if math.Abs(got.Fare-tt.wantFare) > 1e-9 {
 				t.Fatalf("fare=%v want=%v", got.Fare, tt.wantFare)
 			}

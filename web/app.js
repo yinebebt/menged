@@ -6,18 +6,29 @@ const state = {
   cfg: null,
   pickup: null,       // {lat, lng, label?}
   dest: null,
+  stop: null,         // optional point between pickup and dest
+  stopOn: false,      // stop row shown (set or waiting for a tap)
+  waitingMin: 0,
   active: 'pickup',
   multiplier: 1,
   estimate: null,
   places: [],
-  markers: { pickup: null, dest: null },
+  markers: { pickup: null, stop: null, dest: null },
   editingTripId: null,
   viewingTrip: null,
   routeCoords: null,
   cardCollapsed: false,
   saving: false,
   savedKey: null,     // estimate fingerprint after a successful save
-  revSeq: { pickup: 0, dest: 0 },
+  revSeq: { pickup: 0, stop: 0, dest: 0 },
+};
+
+const PIN_KINDS = ['pickup', 'stop', 'dest'];
+const PIN_COLORS = { pickup: '#34c07c', stop: '#f0a030', dest: '#e4574f' };
+const PIN_PLACEHOLDERS = {
+  pickup: 'Tap the map to set pickup',
+  stop: 'Tap the map to set the stop',
+  dest: '…then the destination',
 };
 
 const CARD_COLLAPSE_KEY = 'menged_card_collapsed';
@@ -41,6 +52,7 @@ let map;
 async function init() {
   state.cfg = await api('/api/config');
   $('save-currency').textContent = state.cfg.rates.currency;
+  $('waiting-wrap').hidden = !(state.cfg.rates.price_per_waiting_minute > 0);
 
   const c = state.cfg.map_center;
   map = new maplibregl.Map({
@@ -187,10 +199,9 @@ function recenterMap() {
     return;
   }
   if (state.pickup && state.dest) {
-    fitRouteBounds([
-      [state.pickup.lng, state.pickup.lat],
-      [state.dest.lng, state.dest.lat],
-    ]);
+    fitRouteBounds(
+      [state.pickup, state.stop, state.dest].filter(Boolean).map((p) => [p.lng, p.lat])
+    );
     return;
   }
   if (state.pickup) {
@@ -208,6 +219,7 @@ function emptyLine() {
 function nextPin() {
   if (!state.pickup) return 'pickup';
   if (!state.dest) return 'dest';
+  if (state.stopOn && !state.stop) return 'stop';
   return state.active;
 }
 
@@ -218,14 +230,15 @@ function setPoint(kind, pt, opts) {
     lng: pt.lng,
     label: pt.label || undefined,
   };
-  state.active = kind === 'pickup' ? 'dest' : 'pickup';
+  if (kind === 'stop') state.stopOn = true;
+  else state.active = kind === 'pickup' ? 'dest' : 'pickup';
   state.revSeq[kind] = (state.revSeq[kind] || 0) + 1;
   const seq = state.revSeq[kind];
 
   if (!state.markers[kind]) {
     const m = new maplibregl.Marker({
       draggable: true,
-      color: kind === 'pickup' ? '#34c07c' : '#e4574f',
+      color: PIN_COLORS[kind],
     }).setLngLat([pt.lng, pt.lat]).addTo(map);
     m.on('dragend', () => {
       const ll = m.getLngLat();
@@ -317,9 +330,42 @@ function clearPoint(kind) {
   updatePeek();
 }
 
+// removeStop drops the stop pin and its row; the route is re-quoted without it.
+function removeStop(opts) {
+  opts = opts || {};
+  state.revSeq.stop = (state.revSeq.stop || 0) + 1;
+  state.stop = null;
+  state.stopOn = false;
+  if (state.markers.stop) {
+    state.markers.stop.remove();
+    state.markers.stop = null;
+  }
+  if (state.active === 'stop') state.active = 'dest';
+  renderPoints();
+  if (!opts.skipEstimate) requestEstimate();
+}
+
+function addStop() {
+  state.stopOn = true;
+  state.active = 'stop';
+  renderPoints();
+  showToast('Tap the map to set the stop');
+}
+
+function clampWaiting(min) {
+  return Number.isFinite(min) && min > 0 ? Math.min(min, 600) : 0;
+}
+
+function setWaiting(min) {
+  state.waitingMin = clampWaiting(min);
+  $('waiting-min').value = state.waitingMin;
+}
+
 function resetPins() {
+  removeStop({ skipEstimate: true });
   clearPoint('pickup');
   clearPoint('dest');
+  setWaiting(0);
   state.active = 'pickup';
   state.multiplier = 1;
   state.savedKey = null;
@@ -338,10 +384,12 @@ function showToast(msg) {
 }
 
 function tripPlaceLabel(t, which) {
-  if (which === 'pickup') {
-    return t.pickup_label || t.pickup_lat.toFixed(5) + ', ' + t.pickup_lng.toFixed(5);
-  }
-  return t.dest_label || t.dest_lat.toFixed(5) + ', ' + t.dest_lng.toFixed(5);
+  const lat = t[which + '_lat'], lng = t[which + '_lng'];
+  return t[which + '_label'] || lat.toFixed(5) + ', ' + lng.toFixed(5);
+}
+
+function tripHasStop(t) {
+  return t.stop_lat != null && t.stop_lng != null;
 }
 
 function closeTripDetail() {
@@ -357,7 +405,9 @@ function openTripDetail(t) {
   $('history-list-view').hidden = true;
   $('trip-detail').hidden = false;
   $('history-title').textContent = 'Trip';
-  $('detail-route').textContent = tripPlaceLabel(t, 'pickup') + ' → ' + tripPlaceLabel(t, 'dest');
+  $('detail-route').textContent = tripPlaceLabel(t, 'pickup') +
+    (tripHasStop(t) ? ' → ' + tripPlaceLabel(t, 'stop') : '') +
+    ' → ' + tripPlaceLabel(t, 'dest');
   $('detail-when').textContent = new Date(t.created_at).toLocaleString([], {
     weekday: 'short', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
@@ -366,31 +416,43 @@ function openTripDetail(t) {
   $('detail-min').textContent = Math.round(t.duration_min) + ' min';
   $('detail-suggested').textContent = cur + ' ' + t.suggested_fare;
   $('detail-charged').textContent = t.actual_charged != null ? cur + ' ' + t.actual_charged : '—';
+  $('detail-wait-row').hidden = !(t.waiting_min > 0);
+  $('detail-wait').textContent = Math.round(t.waiting_min) + ' min';
   $('detail-mult').textContent = '×' + (t.multiplier > 0 ? t.multiplier : 1);
   $('detail-rates').textContent =
-    cur + ' ' + t.rate_base + ' + ' + t.rate_per_km + '/km + ' + t.rate_per_min + '/min';
+    cur + ' ' + t.rate_base + ' + ' + t.rate_per_km + '/km + ' + t.rate_per_min + '/min' +
+    (t.rate_per_wait_min > 0 ? ' + ' + t.rate_per_wait_min + '/wait min' : '');
   const note = (t.note || '').trim();
   $('detail-note').hidden = !note;
   $('detail-note').textContent = note ? 'Note: ' + note : '';
 }
 
-function showTripOnMap(t) {
+// loadTripPins puts a saved trip's pins, stop, waiting time and multiplier back on
+// the estimate screen without quoting.
+function loadTripPins(t) {
   $('history').hidden = true;
   $('sheet-edit').hidden = true;
   closeTripDetail();
   setCardCollapsed(false);
   state.multiplier = t.multiplier > 0 ? t.multiplier : 1;
-  setPoint('pickup', {
-    lat: t.pickup_lat,
-    lng: t.pickup_lng,
-    label: t.pickup_label || undefined,
-  }, { skipEstimate: true });
-  setPoint('dest', {
-    lat: t.dest_lat,
-    lng: t.dest_lng,
-    label: t.dest_label || undefined,
-  }, { skipEstimate: true });
+  setWaiting(t.waiting_min || 0);
+  const skip = { skipEstimate: true };
+  for (const kind of ['pickup', 'dest']) {
+    setPoint(kind, {
+      lat: t[kind + '_lat'],
+      lng: t[kind + '_lng'],
+      label: t[kind + '_label'] || undefined,
+    }, skip);
+  }
+  if (tripHasStop(t)) {
+    setPoint('stop', { lat: t.stop_lat, lng: t.stop_lng, label: t.stop_label || undefined }, skip);
+  } else {
+    removeStop(skip);
+  }
+}
 
+function showTripOnMap(t) {
+  loadTripPins(t);
   if (t.route_geometry) {
     state.estimate = {
       distance_km: t.distance_km,
@@ -409,21 +471,8 @@ function showTripOnMap(t) {
 }
 
 function repeatTrip(t) {
-  $('history').hidden = true;
-  $('sheet-edit').hidden = true;
-  closeTripDetail();
-  setCardCollapsed(false);
-  state.multiplier = t.multiplier > 0 ? t.multiplier : 1;
-  setPoint('pickup', {
-    lat: t.pickup_lat,
-    lng: t.pickup_lng,
-    label: t.pickup_label || undefined,
-  });
-  setPoint('dest', {
-    lat: t.dest_lat,
-    lng: t.dest_lng,
-    label: t.dest_label || undefined,
-  });
+  loadTripPins(t);
+  requestEstimate();
   showToast('Pins loaded — quoting…');
 }
 
@@ -450,7 +499,7 @@ function fmtPoint(pt) {
 }
 
 function renderPoints() {
-  for (const kind of ['pickup', 'dest']) {
+  for (const kind of PIN_KINDS) {
     const pt = state[kind];
     const label = $('label-' + kind);
     label.classList.remove('looking-up');
@@ -459,15 +508,19 @@ function renderPoints() {
       label.classList.add('set');
       label.title = pt.label || (pt.lat.toFixed(5) + ', ' + pt.lng.toFixed(5));
     } else {
-      label.textContent = kind === 'pickup' ? 'Tap the map to set pickup' : '…then the destination';
+      label.textContent = PIN_PLACEHOLDERS[kind];
       label.classList.remove('set');
       label.title = '';
     }
-    $('btn-clear-' + kind).hidden = !pt;
+    // The stop's ✕ also cancels a stop that hasn't been placed yet.
+    if (kind !== 'stop') $('btn-clear-' + kind).hidden = !pt;
     const alreadySaved = !!(pt && pt.label && state.places.some((p) => p.label === pt.label));
     $('btn-star-' + kind).hidden = !pt || alreadySaved;
     $('row-' + kind).classList.toggle('active', state.active === kind && state.pickup && state.dest);
   }
+  $('row-stop').hidden = !state.stopOn;
+  $('point-extras').hidden = !(state.pickup && state.dest);
+  $('btn-add-stop').hidden = state.stopOn;
 }
 
 let estimateTimer = null;
@@ -487,7 +540,9 @@ async function runEstimate() {
       method: 'POST',
       body: JSON.stringify({
         pickup: { lat: state.pickup.lat, lng: state.pickup.lng },
+        stop: state.stop ? { lat: state.stop.lat, lng: state.stop.lng } : undefined,
         dest: { lat: state.dest.lat, lng: state.dest.lng },
+        waiting_min: state.waitingMin,
         multiplier: state.multiplier,
       }),
     });
@@ -538,8 +593,9 @@ function estimateKey(est) {
   if (!est || !state.pickup || !state.dest) return null;
   return [
     state.pickup.lat.toFixed(5), state.pickup.lng.toFixed(5),
+    state.stop ? state.stop.lat.toFixed(5) + ',' + state.stop.lng.toFixed(5) : '',
     state.dest.lat.toFixed(5), state.dest.lng.toFixed(5),
-    est.distance_km.toFixed(3), est.fare, state.multiplier,
+    est.distance_km.toFixed(3), est.fare, state.multiplier, state.waitingMin,
   ].join('|');
 }
 
@@ -683,6 +739,10 @@ async function saveTrip() {
     dest_label: state.dest.label || '',
     dest_lat: state.dest.lat,
     dest_lng: state.dest.lng,
+    stop_label: state.stop ? state.stop.label || '' : '',
+    stop_lat: state.stop ? state.stop.lat : undefined,
+    stop_lng: state.stop ? state.stop.lng : undefined,
+    waiting_min: state.waitingMin,
     distance_km: est.distance_km,
     duration_min: est.duration_min,
     route_geometry: est.geometry,
@@ -807,6 +867,54 @@ function deleteTrip() {
       return openHistory();
     })
     .catch((err) => alert(err.message));
+}
+
+// quoteText is the one-line quote sent to a passenger, e.g.
+// "Bole → Ayat, 14.0 km, ~35 min, ETB 240". Unlabelled pins drop the place names.
+function quoteText() {
+  const est = state.estimate;
+  const names = [state.pickup, state.stop, state.dest]
+    .filter(Boolean)
+    .map((p) => (p.label ? shortLabel(p.label) : ''));
+  const parts = [];
+  if (names.every(Boolean)) parts.push(names.join(' → '));
+  parts.push(est.distance_km.toFixed(1) + ' km', '~' + Math.round(est.duration_min) + ' min');
+  if (state.waitingMin > 0) parts.push('+' + state.waitingMin + ' min waiting');
+  parts.push(state.cfg.rates.currency + ' ' + est.fare);
+  return parts.join(', ');
+}
+
+// routeLink opens the same pickup, stop and destination in Google Maps (Maps URLs,
+// no API key). Its route can differ slightly from ours; the quoted fare is ours.
+function routeLink() {
+  const ll = (p) => p.lat.toFixed(6) + ',' + p.lng.toFixed(6);
+  const q = new URLSearchParams({
+    api: '1',
+    origin: ll(state.pickup),
+    destination: ll(state.dest),
+    travelmode: 'driving',
+  });
+  if (state.stop) q.set('waypoints', ll(state.stop));
+  return 'https://www.google.com/maps/dir/?' + q.toString();
+}
+
+async function shareQuote() {
+  if (!state.estimate) return;
+  const text = quoteText() + '\n' + routeLink();
+  if (navigator.share) {
+    try {
+      await navigator.share({ text });
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Quote copied');
+  } catch (_) {
+    prompt('Copy this quote:', text);
+  }
 }
 
 $('card-handle').onclick = (e) => {
@@ -1026,8 +1134,19 @@ $('btn-clear-pickup').onclick = (e) => { e.stopPropagation(); clearPoint('pickup
 $('btn-clear-dest').onclick = (e) => { e.stopPropagation(); clearPoint('dest'); };
 $('btn-star-pickup').onclick = (e) => { e.stopPropagation(); savePlace('pickup'); };
 $('btn-star-dest').onclick = (e) => { e.stopPropagation(); savePlace('dest'); };
+$('btn-clear-stop').onclick = (e) => { e.stopPropagation(); removeStop(); };
+$('btn-star-stop').onclick = (e) => { e.stopPropagation(); savePlace('stop'); };
+$('btn-add-stop').onclick = (e) => { e.stopPropagation(); addStop(); };
 $('row-pickup').onclick = () => { state.active = 'pickup'; renderPoints(); };
+$('row-stop').onclick = () => { state.active = 'stop'; renderPoints(); };
 $('row-dest').onclick = () => { state.active = 'dest'; renderPoints(); };
+
+// Don't write the value back while typing, so the field can be cleared and retyped.
+$('waiting-min').addEventListener('input', () => {
+  state.waitingMin = clampWaiting(parseFloat($('waiting-min').value));
+  requestEstimate();
+});
+$('waiting-min').addEventListener('change', () => setWaiting(state.waitingMin));
 
 $('multipliers').onclick = (e) => {
   const b = e.target.closest('button');
@@ -1038,6 +1157,7 @@ $('multipliers').onclick = (e) => {
 };
 
 $('btn-retry').onclick = runEstimate;
+$('btn-share').onclick = shareQuote;
 $('btn-save').onclick = openSaveSheet;
 $('btn-save-cancel').onclick = () => { $('sheet-save').hidden = true; };
 $('btn-save-confirm').onclick = saveTrip;

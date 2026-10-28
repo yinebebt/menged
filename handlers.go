@@ -143,9 +143,14 @@ func (s *Server) reverse(w http.ResponseWriter, r *http.Request) {
 
 type estimateRequest struct {
 	Pickup     Point   `json:"pickup"`
+	Stop       *Point  `json:"stop,omitempty"`
 	Dest       Point   `json:"dest"`
+	WaitingMin float64 `json:"waiting_min"`
 	Multiplier float64 `json:"multiplier"`
 }
+
+// maxWaitingMin caps typed-in waiting time; anything longer is a typo.
+const maxWaitingMin = 600
 
 type estimateResponse struct {
 	DistanceKM  float64   `json:"distance_km"`
@@ -165,7 +170,16 @@ func (s *Server) estimate(w http.ResponseWriter, r *http.Request) {
 	if req.Multiplier <= 0 {
 		req.Multiplier = 1
 	}
-	for _, p := range []Point{req.Pickup, req.Dest} {
+	if req.WaitingMin < 0 || req.WaitingMin > maxWaitingMin {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("waiting_min must be 0–%d", maxWaitingMin))
+		return
+	}
+	pts := []Point{req.Pickup}
+	if req.Stop != nil {
+		pts = append(pts, *req.Stop)
+	}
+	pts = append(pts, req.Dest)
+	for _, p := range pts {
 		if !InServiceArea(p) {
 			writeError(w, http.StatusBadRequest, ErrOutsideArea.Error())
 			return
@@ -174,7 +188,7 @@ func (s *Server) estimate(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	route, err := s.router.Route(ctx, req.Pickup, req.Dest)
+	route, err := s.router.Route(ctx, pts)
 	if err != nil {
 		slog.Error("routing failed", "err", err,
 			"pickup", fmt.Sprintf("%.5f,%.5f", req.Pickup.Lat, req.Pickup.Lng),
@@ -188,7 +202,7 @@ func (s *Server) estimate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rates := s.cfg.Rates()
-	breakdown := CalculateFare(route.DistanceKM, route.DurationMin, req.Multiplier, rates)
+	breakdown := CalculateFare(route.DistanceKM, route.DurationMin, req.WaitingMin, req.Multiplier, rates)
 
 	writeJSON(w, http.StatusOK, estimateResponse{
 		DistanceKM:  route.DistanceKM,
@@ -219,10 +233,21 @@ func (s *Server) saveTrip(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "trip has no estimate")
 		return
 	}
-	for _, p := range []Point{
-		{Lat: t.PickupLat, Lng: t.PickupLng},
-		{Lat: t.DestLat, Lng: t.DestLng},
-	} {
+	if (t.StopLat == nil) != (t.StopLng == nil) {
+		writeError(w, http.StatusBadRequest, "stop needs both stop_lat and stop_lng")
+		return
+	}
+	if t.WaitingMin < 0 || t.WaitingMin > maxWaitingMin {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("waiting_min must be 0–%d", maxWaitingMin))
+		return
+	}
+	pts := []Point{{Lat: t.PickupLat, Lng: t.PickupLng}, {Lat: t.DestLat, Lng: t.DestLng}}
+	if t.StopLat != nil {
+		pts = append(pts, Point{Lat: *t.StopLat, Lng: *t.StopLng})
+	} else {
+		t.StopLabel = ""
+	}
+	for _, p := range pts {
 		if !InServiceArea(p) {
 			writeError(w, http.StatusBadRequest, ErrOutsideArea.Error())
 			return
@@ -233,6 +258,7 @@ func (s *Server) saveTrip(w http.ResponseWriter, r *http.Request) {
 	}
 	rates := s.cfg.Rates()
 	t.RateBase, t.RatePerKM, t.RatePerMin = rates.BaseFare, rates.PerKM, rates.PerMinute
+	t.RatePerWaitMin = rates.PerWaitMin
 
 	if err := s.store.InsertTrip(&t); err != nil {
 		s.serverError(w, "save trip", err)

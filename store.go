@@ -19,6 +19,11 @@ type Trip struct {
 	DestLat     float64 `json:"dest_lat"`
 	DestLng     float64 `json:"dest_lng"`
 
+	StopLabel  string   `json:"stop_label,omitempty"`
+	StopLat    *float64 `json:"stop_lat,omitempty"` // nil when the trip has no stop
+	StopLng    *float64 `json:"stop_lng,omitempty"`
+	WaitingMin float64  `json:"waiting_min"`
+
 	DistanceKM    float64 `json:"distance_km"`
 	DurationMin   float64 `json:"duration_min"`
 	RouteGeometry string  `json:"route_geometry,omitempty"`
@@ -27,9 +32,10 @@ type Trip struct {
 	ActualCharged *float64 `json:"actual_charged"` // nil when not recorded
 	Multiplier    float64  `json:"multiplier"`
 
-	RateBase   float64 `json:"rate_base"`
-	RatePerKM  float64 `json:"rate_per_km"`
-	RatePerMin float64 `json:"rate_per_min"`
+	RateBase       float64 `json:"rate_base"`
+	RatePerKM      float64 `json:"rate_per_km"`
+	RatePerMin     float64 `json:"rate_per_min"`
+	RatePerWaitMin float64 `json:"rate_per_wait_min"`
 
 	Note string `json:"note,omitempty"`
 }
@@ -77,21 +83,27 @@ func (s *Store) Close() error { return s.db.Close() }
 func now() string { return time.Now().Format(time.RFC3339) }
 
 const tripCols = `id, created_at, pickup_label, pickup_lat, pickup_lng,
-	dest_label, dest_lat, dest_lng, distance_km, duration_min, route_geometry,
-	suggested_fare, actual_charged, multiplier, rate_base, rate_per_km, rate_per_min, note`
+	dest_label, dest_lat, dest_lng, stop_label, stop_lat, stop_lng, waiting_min,
+	distance_km, duration_min, route_geometry, suggested_fare, actual_charged, multiplier,
+	rate_base, rate_per_km, rate_per_min, rate_per_wait_min, note`
 
 func scanTrip(row interface{ Scan(...any) error }) (Trip, error) {
 	var t Trip
-	var pickupLabel, destLabel, geometry, note sql.NullString
-	var charged sql.NullFloat64
+	var pickupLabel, destLabel, stopLabel, geometry, note sql.NullString
+	var charged, stopLat, stopLng sql.NullFloat64
 	err := row.Scan(&t.ID, &t.CreatedAt, &pickupLabel, &t.PickupLat, &t.PickupLng,
-		&destLabel, &t.DestLat, &t.DestLng, &t.DistanceKM, &t.DurationMin, &geometry,
-		&t.SuggestedFare, &charged, &t.Multiplier, &t.RateBase, &t.RatePerKM, &t.RatePerMin, &note)
+		&destLabel, &t.DestLat, &t.DestLng, &stopLabel, &stopLat, &stopLng, &t.WaitingMin,
+		&t.DistanceKM, &t.DurationMin, &geometry, &t.SuggestedFare, &charged, &t.Multiplier,
+		&t.RateBase, &t.RatePerKM, &t.RatePerMin, &t.RatePerWaitMin, &note)
 	if err != nil {
 		return t, err
 	}
 	t.PickupLabel = pickupLabel.String
 	t.DestLabel = destLabel.String
+	t.StopLabel = stopLabel.String
+	if stopLat.Valid && stopLng.Valid {
+		t.StopLat, t.StopLng = &stopLat.Float64, &stopLng.Float64
+	}
 	t.RouteGeometry = geometry.String
 	t.Note = note.String
 	if charged.Valid {
@@ -123,12 +135,14 @@ func (s *Store) ListTrips() ([]Trip, error) {
 func (s *Store) InsertTrip(t *Trip) error {
 	t.CreatedAt = now()
 	res, err := s.db.Exec(`INSERT INTO trips (created_at, pickup_label, pickup_lat, pickup_lng,
-		dest_label, dest_lat, dest_lng, distance_km, duration_min, route_geometry,
-		suggested_fare, actual_charged, multiplier, rate_base, rate_per_km, rate_per_min, note)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		dest_label, dest_lat, dest_lng, stop_label, stop_lat, stop_lng, waiting_min,
+		distance_km, duration_min, route_geometry, suggested_fare, actual_charged, multiplier,
+		rate_base, rate_per_km, rate_per_min, rate_per_wait_min, note)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.CreatedAt, t.PickupLabel, t.PickupLat, t.PickupLng,
-		t.DestLabel, t.DestLat, t.DestLng, t.DistanceKM, t.DurationMin, t.RouteGeometry,
-		t.SuggestedFare, t.ActualCharged, t.Multiplier, t.RateBase, t.RatePerKM, t.RatePerMin, t.Note)
+		t.DestLabel, t.DestLat, t.DestLng, t.StopLabel, t.StopLat, t.StopLng, t.WaitingMin,
+		t.DistanceKM, t.DurationMin, t.RouteGeometry, t.SuggestedFare, t.ActualCharged, t.Multiplier,
+		t.RateBase, t.RatePerKM, t.RatePerMin, t.RatePerWaitMin, t.Note)
 	if err != nil {
 		return err
 	}

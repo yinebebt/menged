@@ -6,6 +6,7 @@
   --muted: #8a97a5;
   --green: #34c07c;
   --red: #e4574f;
+  --amber: #f0a030;
   --accent: #4da3ff;
   --radius: 14px;
 }
@@ -318,6 +319,33 @@ html, body {
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
 .dot.pickup { background: var(--green); }
 .dot.dest { background: var(--red); }
+.dot.stop { background: var(--amber); }
+
+.point-extras {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 4px 0 2px;
+}
+.waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.waiting input {
+  width: 56px;
+  border: 1px solid var(--card-2);
+  background: var(--card-2);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 3px 6px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.waiting input:focus { outline: none; border-color: var(--accent); }
 .point-label {
   flex: 1;
   min-width: 0;
@@ -451,6 +479,17 @@ html, body {
   min-width: 72px;
   padding: 10px 16px;
 }
+.btn-share {
+  flex: 0 0 auto;
+  border: 0;
+  background: var(--card-2);
+  color: var(--text);
+  font-size: 14px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.btn-share:active { filter: brightness(1.15); }
 
 @media (min-width: 640px) {
   .action-row {

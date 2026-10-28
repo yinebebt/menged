@@ -44,10 +44,16 @@ type orsSummary struct {
 	Duration float64 `json:"duration"` // seconds
 }
 
-func (o *orsRouter) Route(ctx context.Context, from, to Point) (Route, error) {
+func (o *orsRouter) Route(ctx context.Context, pts []Point) (Route, error) {
+	coords := make([][]float64, len(pts))
+	radiuses := make([]int, len(pts))
+	for i, p := range pts {
+		coords[i] = []float64{p.Lng, p.Lat}
+		radiuses[i] = 5000
+	}
 	body, _ := json.Marshal(map[string]any{
-		"coordinates": [][]float64{{from.Lng, from.Lat}, {to.Lng, to.Lat}},
-		"radiuses":    []int{5000, 5000},
+		"coordinates": coords,
+		"radiuses":    radiuses,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		o.baseURL+"/v2/directions/driving-car/json", bytes.NewReader(body))

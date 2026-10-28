@@ -27,7 +27,7 @@ func TestIsORSUnroutable(t *testing.T) {
 
 func TestCachedRouter(t *testing.T) {
 	var calls atomic.Int32
-	inner := RouterFunc(func(ctx context.Context, from, to Point) (Route, error) {
+	inner := RouterFunc(func(ctx context.Context, pts []Point) (Route, error) {
 		n := calls.Add(1)
 		if n == 1 {
 			return Route{}, errors.New("transient")
@@ -37,23 +37,23 @@ func TestCachedRouter(t *testing.T) {
 	r := &cachedRouter{inner: inner, cache: map[string]cachedRoute{}}
 	from, to := Point{Lat: 9.01, Lng: 38.76}, Point{Lat: 9.02, Lng: 38.77}
 
-	got, err := r.Route(context.Background(), from, to)
+	got, err := r.Route(context.Background(), []Point{from, to})
 	if err != nil || got.DistanceKM != 1.5 || calls.Load() != 2 {
 		t.Fatalf("retry: got=%#v err=%v calls=%d", got, err, calls.Load())
 	}
-	if _, err := r.Route(context.Background(), from, to); err != nil || calls.Load() != 2 {
+	if _, err := r.Route(context.Background(), []Point{from, to}); err != nil || calls.Load() != 2 {
 		t.Fatalf("cache: err=%v calls=%d", err, calls.Load())
 	}
 
 	perm := &cachedRouter{
-		inner: RouterFunc(func(ctx context.Context, from, to Point) (Route, error) {
+		inner: RouterFunc(func(ctx context.Context, pts []Point) (Route, error) {
 			calls.Add(1)
 			return Route{}, permanentRouteError{ErrUnroutable}
 		}),
 		cache: map[string]cachedRoute{},
 	}
 	before := calls.Load()
-	_, err = perm.Route(context.Background(), from, to)
+	_, err = perm.Route(context.Background(), []Point{from, to})
 	if !errors.Is(err, ErrUnroutable) || calls.Load() != before+1 {
 		t.Fatalf("permanent: err=%v calls=%d", err, calls.Load()-before)
 	}
@@ -86,8 +86,8 @@ func TestPeliasHits(t *testing.T) {
 	}
 }
 
-type RouterFunc func(ctx context.Context, from, to Point) (Route, error)
+type RouterFunc func(ctx context.Context, pts []Point) (Route, error)
 
-func (f RouterFunc) Route(ctx context.Context, from, to Point) (Route, error) {
-	return f(ctx, from, to)
+func (f RouterFunc) Route(ctx context.Context, pts []Point) (Route, error) {
+	return f(ctx, pts)
 }
