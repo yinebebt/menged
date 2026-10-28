@@ -155,7 +155,7 @@ func TestMeasureHandler(t *testing.T) {
 	body, _ := json.Marshal(measureRequest{Track: tr, Route: true})
 
 	post := func(router Router, body string) (*httptest.ResponseRecorder, measureResponse) {
-		h := NewServer(cfg, nil, router, nil).routes(http.NotFoundHandler())
+		h := NewServer(cfg, nil, router, nil, logMailer{}).routes(http.NotFoundHandler())
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/measure", strings.NewReader(body)))
 		var out measureResponse

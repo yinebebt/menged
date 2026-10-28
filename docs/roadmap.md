@@ -165,7 +165,7 @@ Be honest that this is a different product, and that most of the v1 decisions we
 - ~~accounts and per-user trip isolation~~ — shipped early, because adding the owner to
   every trip was free before the schema was stable. Drivers sign up in the app.
 - per-user rate cards (until then everyone shares the config's rate card)
-- password reset and user management that don't need a shell on the server
+- user management (listing, removing drivers) that doesn't need a shell on the server
 - Postgres instead of SQLite, once there are enough drivers writing at once to matter
 - a hosted deployment with the operational responsibilities that follow
 

@@ -19,7 +19,7 @@ func TestEstimateWithStopAndWaiting(t *testing.T) {
 		Currency: "ETB", BaseFare: 50, PricePerKM: 10, PricePerMinute: 2,
 		PricePerWait: 3, MinimumFare: 80, Rounding: 5,
 	}}
-	h := NewServer(cfg, nil, router, nil).routes(http.NotFoundHandler())
+	h := NewServer(cfg, nil, router, nil, logMailer{}).routes(http.NotFoundHandler())
 
 	body := `{"pickup":{"lat":9.01,"lng":38.76},"stop":{"lat":9.015,"lng":38.765},
 		"dest":{"lat":9.02,"lng":38.77},"waiting_min":10}`

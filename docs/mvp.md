@@ -173,10 +173,12 @@ Small enough to list completely.
 | `POST` | `/api/measure` | `{track:[{lat,lng,t,acc}], multiplier?, route?}` → measured `{distance_km, duration_min, waiting_min, rough, method, geometry, track, start, end, fare, breakdown}` |
 | `GET` | `/api/geocode` | `?q=&lat=&lng=` → place hits (when geocoding configured) |
 | `GET` | `/api/reverse` | `?lat=&lng=` → `{label}` for a pin |
-| `POST` | `/api/signup` | `{username, password}` → creates the account, then as login (403 when `server.signup` is off) |
-| `POST` | `/api/login` | `{username, password}` → `{username}` and a session cookie |
+| `POST` | `/api/signup` | `{email, password}` → creates the account, then as login (403 when `server.signup` is off) |
+| `POST` | `/api/login` | `{email, password}` → `{email}` and a session cookie |
+| `POST` | `/api/password/forgot` | `{email}` → 202 always; emails a reset link if the account exists |
+| `POST` | `/api/password/reset` | `{token, password}` → sets it, signs out other devices, then as login |
 | `POST` | `/api/logout` | ends the session |
-| `GET` | `/api/me` | 🔒 `{username}`, or 401 when signed out |
+| `GET` | `/api/me` | 🔒 `{email}`, or 401 when signed out |
 | `GET` | `/api/trips` | 🔒 your trips, newest first |
 | `POST` | `/api/trips` | 🔒 save a trip |
 | `PATCH` | `/api/trips/{id}` | 🔒 edit `actual_charged` / `note` |
@@ -199,7 +201,7 @@ and [§5](architecture.md#5-exposing-it-beyond-localhost).
 ## 7. Explicitly not in v1
 
 - More than one planned stop (unplanned stops are captured by trip recording)
-- Password reset in the app, or per-driver rate cards (a reset is a CLI command on the server)
+- Email confirmation at sign-up, or per-driver rate cards
 - Passenger-facing anything; payments, receipts, SMS
 - Automatic surge / time-of-day pricing (multiplier stays manual)
 - Offline routing or offline map tiles

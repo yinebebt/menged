@@ -41,9 +41,10 @@ Keep menged on loopback behind a TLS reverse proxy. The process refuses a non-lo
 1. `go build -o menged .` — ship binary + `config.yaml`; `ORS_API_KEY` in the environment only.
 2. `server.listen: 127.0.0.1:8080`
 3. nginx/Caddy: HTTPS → `127.0.0.1:8080`, setting `X-Forwarded-Proto`; rate-limit `/api/login` and the routing endpoints.
-4. Create your account in the app (sign-in sheet → "Create an account"). `server.signup: false` closes sign-up; `./menged -user NAME` resets a forgotten password, or adds a user while sign-up is closed.
-5. systemd (or similar). Probe: `curl -fsS https://your.host/api/health`
-6. Backup `menged.db` (and `-wal` / `-shm` if present)
+4. Set `server.public_url` (reset links point there) and `mail:` for password-reset emails: `provider: mailtrap`, `MAILTRAP_API_TOKEN` in the environment, and `from_email` on a domain verified in Mailtrap (until then its demo domain only sends to the Mailtrap account's own address). Turn click tracking off for that domain, or reset links go through Mailtrap's redirect.
+5. Create your account in the app (sign-in sheet → "Create an account"). `server.signup: false` closes sign-up; `./menged -reset-password EMAIL` sets a password from the server if email is broken.
+6. systemd (or similar). Probe: `curl -fsS https://your.host/api/health`
+7. Backup `menged.db` (and `-wal` / `-shm` if present)
 
 Before v1 there are no migrations: when the schema changes, move the old `menged.db` aside and let the new build create a fresh one.
 

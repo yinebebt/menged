@@ -151,14 +151,14 @@
   <form class="sheet" id="login-form" autocomplete="on">
     <h2 id="login-title">Sign in</h2>
     <div class="muted" id="login-reason">Your trips and saved places are private to you.</div>
-    <label>
-      <span class="sheet-caption">Username</span>
-      <input id="login-username" name="username" type="text" autocomplete="username"
-             autocapitalize="none" autocorrect="off" spellcheck="false" required>
+    <label id="login-email-wrap">
+      <span class="sheet-caption">Email</span>
+      <input id="login-email" name="email" type="email" inputmode="email" autocomplete="username"
+             autocapitalize="none" autocorrect="off" spellcheck="false">
     </label>
-    <label>
+    <label id="login-password-wrap">
       <span class="sheet-caption">Password <span class="muted" id="login-hint" hidden>at least 8 characters</span></span>
-      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      <input id="login-password" name="password" type="password" autocomplete="current-password">
     </label>
     <label id="login-repeat-wrap" hidden>
       <span class="sheet-caption">Password again</span>
@@ -169,9 +169,12 @@
       <button type="button" id="btn-login-cancel">Cancel</button>
       <button type="submit" id="btn-login" class="primary">Sign in</button>
     </div>
-    <p class="login-switch muted" id="login-switch" hidden>
-      <span id="login-switch-text">New here?</span>
-      <button type="button" class="link-btn" id="btn-login-switch">Create an account</button>
+    <p class="login-links muted">
+      <button type="button" class="link-btn" id="btn-login-forgot">Forgot password?</button>
+      <span id="login-switch">
+        <span id="login-switch-text">New here?</span>
+        <button type="button" class="link-btn" id="btn-login-switch">Create an account</button>
+      </span>
     </p>
   </form>
 </div>

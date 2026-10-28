@@ -1,9 +1,16 @@
--- Users sign up in the app; menged -user NAME resets a password from the server.
+-- Users sign up in the app with an email; a forgotten password is reset by an
+-- emailed link (or menged -reset-password EMAIL on the server).
 CREATE TABLE IF NOT EXISTS users (
     id              INTEGER PRIMARY KEY,
-    username        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    email           TEXT    NOT NULL UNIQUE COLLATE NOCASE,
     password_hash   TEXT    NOT NULL,          -- bcrypt
     created_at      TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS password_resets (
+    token_hash      TEXT    PRIMARY KEY,       -- sha256 of the emailed token, hex
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at      TEXT    NOT NULL           -- RFC3339 UTC; one hour after issue
 );
 
 CREATE TABLE IF NOT EXISTS sessions (

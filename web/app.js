@@ -4,9 +4,10 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   cfg: null,
-  user: null,         // {username} when signed in
+  user: null,         // {email} when signed in
   afterLogin: null,   // what to carry on with once the sign-in sheet succeeds
-  signingUp: false,   // the sheet is in "create an account" mode
+  loginMode: 'signin', // which form the sign-in sheet shows; see LOGIN_MODES
+  resetToken: null,   // from an emailed reset link (?reset=…)
   pickup: null,       // {lat, lng, label?}
   dest: null,
   stop: null,         // optional point between pickup and dest
@@ -63,6 +64,7 @@ async function init() {
   try {
     setUser(await api('/api/me'));
   } catch (_) { /* signed out: quotes still work */ }
+  openResetFromLink();
   $('save-currency').textContent = state.cfg.rates.currency;
 
   const c = state.cfg.map_center;
@@ -941,32 +943,54 @@ function deleteTrip() {
 // sign-in sheet when needed and then carries on with what was asked for.
 
 function setUser(u) {
-  state.user = u && u.username ? { username: u.username } : null;
-  $('account-name').textContent = state.user ? state.user.username : '';
+  state.user = u && u.email ? { email: u.email } : null;
+  $('account-name').textContent = state.user ? state.user.email : '';
   $('btn-logout').hidden = !state.user;
 }
 
 function requireUser(then, reason) {
   if (state.user) return then();
   state.afterLogin = then;
-  $('login-reason').textContent = reason || 'Your session ended. Sign in again to carry on.';
-  setSignupMode(false);
-  $('sheet-login').hidden = false;
-  const field = $('login-username').value ? 'login-password' : 'login-username';
-  $(field).focus();
+  openLogin('signin', reason || 'Your session ended. Sign in again to carry on.');
 }
 
-// setSignupMode switches the sheet between signing in and creating an account.
-function setSignupMode(on) {
-  state.signingUp = on;
-  $('login-title').textContent = on ? 'Create an account' : 'Sign in';
-  $('btn-login').textContent = on ? 'Create account' : 'Sign in';
-  $('login-hint').hidden = !on;
-  $('login-repeat-wrap').hidden = !on;
-  $('login-password').autocomplete = on ? 'new-password' : 'current-password';
-  $('login-switch').hidden = !(state.cfg && state.cfg.signup);
-  $('login-switch-text').textContent = on ? 'Have an account?' : 'New here?';
-  $('btn-login-switch').textContent = on ? 'Sign in' : 'Create an account';
+// The sign-in sheet's four forms. repeat asks for the password twice: there is no
+// other way to catch a typo in a new password.
+const LOGIN_MODES = {
+  signin: { title: 'Sign in', submit: 'Sign in', email: true, password: 'current-password' },
+  signup: { title: 'Create an account', submit: 'Create account', email: true, password: 'new-password', repeat: true },
+  forgot: { title: 'Reset your password', submit: 'Send reset link', email: true },
+  reset: { title: 'Choose a new password', submit: 'Save password', password: 'new-password', repeat: true },
+};
+
+function openLogin(mode, reason) {
+  if (reason != null) $('login-reason').textContent = reason;
+  setLoginMode(mode);
+  $('sheet-login').hidden = false;
+  // Start where typing is needed: the email, unless it's filled in and a password follows.
+  const m = LOGIN_MODES[mode];
+  $(m.email && (!m.password || !$('login-email').value) ? 'login-email' : 'login-password').focus();
+}
+
+function setLoginMode(mode) {
+  const m = LOGIN_MODES[mode];
+  state.loginMode = mode;
+  $('login-title').textContent = m.title;
+  $('btn-login').textContent = m.submit;
+  $('login-email-wrap').hidden = !m.email;
+  $('login-email').required = !!m.email;
+  $('login-password-wrap').hidden = !m.password;
+  $('login-password').required = !!m.password;
+  $('login-password').autocomplete = m.password || 'off';
+  $('login-hint').hidden = !m.repeat;
+  $('login-repeat-wrap').hidden = !m.repeat;
+  $('login-repeat').required = !!m.repeat;
+  $('btn-login-forgot').hidden = mode !== 'signin';
+  const signupOpen = !!(state.cfg && state.cfg.signup);
+  $('login-switch').hidden = mode === 'reset' || (mode !== 'forgot' && !signupOpen);
+  const back = mode === 'signup' || mode === 'forgot';
+  $('login-switch-text').textContent = mode === 'forgot' ? 'Remembered it?' : back ? 'Have an account?' : 'New here?';
+  $('btn-login-switch').textContent = back ? 'Sign in' : 'Create an account';
   $('login-error').hidden = true;
   $('login-password').value = '';
   $('login-repeat').value = '';
@@ -977,25 +1001,37 @@ function loginError(msg) {
   $('login-error').hidden = false;
 }
 
-async function signIn(e) {
+async function submitLogin(e) {
   e.preventDefault();
-  const signup = state.signingUp;
-  if (signup && $('login-password').value !== $('login-repeat').value) {
+  const mode = state.loginMode;
+  if (LOGIN_MODES[mode].repeat && $('login-password').value !== $('login-repeat').value) {
     return loginError('The passwords don\u2019t match.');
   }
+  const email = $('login-email').value.trim();
+  const password = $('login-password').value;
   const btn = $('btn-login');
   btn.disabled = true;
   try {
-    setUser(await api(signup ? '/api/signup' : '/api/login', {
-      method: 'POST',
-      body: JSON.stringify({
-        username: $('login-username').value.trim(),
-        password: $('login-password').value,
-      }),
-    }));
+    if (mode === 'forgot') {
+      await api('/api/password/forgot', { method: 'POST', body: JSON.stringify({ email }) });
+      state.afterLogin = null;
+      $('sheet-login').hidden = true;
+      showToast('If ' + email + ' has an account, a reset link is on its way');
+      return;
+    }
+    const call = {
+      signin: ['/api/login', { email, password }],
+      signup: ['/api/signup', { email, password }],
+      reset: ['/api/password/reset', { token: state.resetToken, password }],
+    }[mode];
+    setUser(await api(call[0], { method: 'POST', body: JSON.stringify(call[1]) }));
     $('sheet-login').hidden = true;
-    setSignupMode(false);
-    if (signup) showToast('Account created — welcome, ' + state.user.username);
+    setLoginMode('signin');
+    if (mode === 'signup') showToast('Account created — welcome');
+    if (mode === 'reset') {
+      state.resetToken = null;
+      showToast('Password changed — you\u2019re signed in');
+    }
     await loadPlaces();
     const then = state.afterLogin;
     state.afterLogin = null;
@@ -1005,6 +1041,18 @@ async function signIn(e) {
   } finally {
     btn.disabled = false;
   }
+}
+
+// openResetFromLink handles the emailed link (/?reset=TOKEN): the token is taken
+// out of the address bar right away, then the "choose a new password" form opens.
+function openResetFromLink() {
+  const params = new URLSearchParams(location.search);
+  const token = params.get('reset');
+  if (!token) return;
+  state.resetToken = token;
+  params.delete('reset');
+  history.replaceState(null, '', location.pathname + (params.size ? '?' + params : ''));
+  openLogin('reset', 'Choose a new password for your account.');
 }
 
 // signOut also ends a recording in progress and forgets a priced one, so whoever
@@ -1600,10 +1648,14 @@ $('btn-save-cancel').onclick = () => { $('sheet-save').hidden = true; };
 $('btn-save-confirm').onclick = saveTrip;
 
 $('btn-history').onclick = () => openHistory();
-$('login-form').addEventListener('submit', signIn);
+$('login-form').addEventListener('submit', submitLogin);
 $('btn-login-switch').onclick = () => {
-  setSignupMode(!state.signingUp);
-  $('login-username').focus();
+  setLoginMode(state.loginMode === 'signin' ? 'signup' : 'signin');
+  $('login-email').focus();
+};
+$('btn-login-forgot').onclick = () => {
+  setLoginMode('forgot');
+  $('login-email').focus();
 };
 $('btn-login-cancel').onclick = () => {
   state.afterLogin = null;

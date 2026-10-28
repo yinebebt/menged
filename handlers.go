@@ -21,11 +21,12 @@ type Server struct {
 	store    *Store
 	router   Router
 	geocoder Geocoder
+	mailer   Mailer
 }
 
-// NewServer wires config, store, router, and geocoder into an HTTP server.
-func NewServer(cfg *Config, store *Store, router Router, geocoder Geocoder) *Server {
-	return &Server{cfg: cfg, store: store, router: router, geocoder: geocoder}
+// NewServer wires config, store, router, geocoder, and mailer into an HTTP server.
+func NewServer(cfg *Config, store *Store, router Router, geocoder Geocoder, mailer Mailer) *Server {
+	return &Server{cfg: cfg, store: store, router: router, geocoder: geocoder, mailer: mailer}
 }
 
 func (s *Server) routes(static http.Handler) http.Handler {
@@ -40,6 +41,8 @@ func (s *Server) routes(static http.Handler) http.Handler {
 
 	mux.HandleFunc("POST /api/signup", s.signup)
 	mux.HandleFunc("POST /api/login", s.login)
+	mux.HandleFunc("POST /api/password/forgot", s.forgotPassword)
+	mux.HandleFunc("POST /api/password/reset", s.resetPassword)
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.HandleFunc("GET /api/me", s.requireUser(s.me))
 

@@ -610,7 +610,13 @@ html, body {
 
 #sheet-login { z-index: 25; } /* above the history panel and the other sheets */
 .login-error { color: var(--red); font-size: 13px; }
-.login-switch { font-size: 13px; text-align: center; }
+.login-links {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 13px;
+}
 .link-btn {
   border: 0;
   background: none;

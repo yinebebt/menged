@@ -13,15 +13,13 @@ func newTestStore(t *testing.T) (*Store, int64) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	return s, addUser(t, s, "driver")
+	return s, addUser(t, s, "driver@example.com")
 }
 
-func addUser(t *testing.T, s *Store, name string) int64 {
+// addUser creates an account with the password "correct horse".
+func addUser(t *testing.T, s *Store, email string) int64 {
 	t.Helper()
-	if _, err := s.SetPassword(name, "correct horse"); err != nil {
-		t.Fatal(err)
-	}
-	u, err := s.Authenticate(name, "correct horse")
+	u, err := s.CreateUser(email, "correct horse")
 	if err != nil {
 		t.Fatal(err)
 	}

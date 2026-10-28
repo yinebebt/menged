@@ -1,47 +1,58 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestSetPasswordAndAuthenticate(t *testing.T) {
-	s, _ := newTestStore(t) // has "driver" / "correct horse"
-
-	if _, err := s.SetPassword("bad name", "long enough"); !errors.Is(err, errInvalidUsername) {
-		t.Fatalf("invalid username: %v", err)
+func TestNormalizeEmail(t *testing.T) {
+	for in, want := range map[string]string{
+		" Abebe@Example.COM ": "abebe@example.com",
+		"a.b+menged@mail.co":  "a.b+menged@mail.co",
+	} {
+		if got, err := normalizeEmail(in); err != nil || got != want {
+			t.Errorf("%q: got %q, %v", in, got, err)
+		}
 	}
-	if _, err := s.SetPassword("abebe", "short"); !errors.Is(err, errShortPassword) {
+	for _, bad := range []string{"", "abebe", "abebe@", "@example.com", "abebe@localhost",
+		"Abebe <abebe@example.com>", "a b@example.com", strings.Repeat("a", 250) + "@example.com"} {
+		if _, err := normalizeEmail(bad); !errors.Is(err, errInvalidEmail) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestCreateUserAndAuthenticate(t *testing.T) {
+	s, _ := newTestStore(t) // driver@example.com / "correct horse"
+
+	if _, err := s.CreateUser("not-an-email", "long enough"); !errors.Is(err, errInvalidEmail) {
+		t.Fatalf("invalid email: %v", err)
+	}
+	if _, err := s.CreateUser("abebe@example.com", "short"); !errors.Is(err, errShortPassword) {
 		t.Fatalf("short password: %v", err)
 	}
-	if _, err := s.Authenticate("driver", "wrong password"); !errors.Is(err, errBadLogin) {
+	if _, err := s.CreateUser("abebe@example.com", strings.Repeat("x", 73)); !errors.Is(err, errLongPassword) {
+		t.Fatalf("long password: %v", err)
+	}
+	if _, err := s.CreateUser("DRIVER@example.com", "long enough"); !errors.Is(err, errEmailTaken) {
+		t.Fatalf("taken, any case: %v", err)
+	}
+	if _, err := s.Authenticate("driver@example.com", "wrong password"); !errors.Is(err, errBadLogin) {
 		t.Fatalf("wrong password: %v", err)
 	}
-	if _, err := s.Authenticate("nobody", "correct horse"); !errors.Is(err, errBadLogin) {
-		t.Fatalf("unknown user: %v", err)
+	if _, err := s.Authenticate("nobody@example.com", "correct horse"); !errors.Is(err, errBadLogin) {
+		t.Fatalf("unknown email: %v", err)
 	}
-	if u, err := s.Authenticate("DRIVER", "correct horse"); err != nil || u.Username != "driver" {
-		t.Fatalf("usernames are case-insensitive: %v %v", u, err)
-	}
-
-	u, _ := s.Authenticate("driver", "correct horse")
-	token, _, err := s.CreateSession(u.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	created, err := s.SetPassword("Driver", "a new password")
-	if err != nil || created {
-		t.Fatalf("reset: created=%v err=%v", created, err)
-	}
-	if got, _, _ := s.SessionUser(token); got != nil {
-		t.Fatal("a password reset must sign the user out")
-	}
-	if _, err := s.Authenticate("driver", "a new password"); err != nil {
-		t.Fatalf("new password: %v", err)
+	if u, err := s.Authenticate(" Driver@Example.com", "correct horse"); err != nil || u.Email != "driver@example.com" {
+		t.Fatalf("email is case-insensitive: %v %v", u, err)
 	}
 }
 
@@ -70,6 +81,9 @@ func TestSessionExpiryAndRenewal(t *testing.T) {
 	if u, _, _ := s.SessionUser(token); u != nil {
 		t.Fatal("expired session still valid")
 	}
+	if u, _, _ := s.SessionUser("not-a-token"); u != nil {
+		t.Fatal("unknown token accepted")
+	}
 
 	// Expired sessions nobody presents again are pruned at the next sign-in.
 	stale, _, _ := s.CreateSession(uid)
@@ -82,9 +96,6 @@ func TestSessionExpiryAndRenewal(t *testing.T) {
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE token_hash = ?`, hashToken(stale)).Scan(&n)
 	if n != 0 {
 		t.Fatal("expired session not pruned")
-	}
-	if u, _, _ := s.SessionUser("not-a-token"); u != nil {
-		t.Fatal("unknown token accepted")
 	}
 }
 
@@ -119,11 +130,13 @@ func (c *client) do(method, path, body string, hdr ...string) *httptest.Response
 	return rec
 }
 
+const driverLogin = `{"email":"driver@example.com","password":"correct horse"}`
+
 func TestAuthHTTP(t *testing.T) {
 	s, _ := newTestStore(t)
-	addUser(t, s, "other")
+	addUser(t, s, "other@example.com")
 	cfg := &Config{Fare: FareConfig{Currency: "ETB", BaseFare: 50, PricePerKM: 10, MinimumFare: 80}}
-	h := NewServer(cfg, s, nil, nil).routes(http.NotFoundHandler())
+	h := NewServer(cfg, s, nil, nil, logMailer{}).routes(http.NotFoundHandler())
 	a := &client{t: t, h: h}
 	b := &client{t: t, h: h}
 
@@ -133,19 +146,18 @@ func TestAuthHTTP(t *testing.T) {
 	if rec := a.do("GET", "/api/me", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("me signed out: %d", rec.Code)
 	}
-	if rec := a.do("POST", "/api/login", `{"username":"driver","password":"nope"}`); rec.Code != http.StatusUnauthorized || a.cookie != nil {
+	if rec := a.do("POST", "/api/login", `{"email":"driver@example.com","password":"nope"}`); rec.Code != http.StatusUnauthorized || a.cookie != nil {
 		t.Fatalf("bad login: %d cookie=%v", rec.Code, a.cookie)
 	}
 
-	rec := a.do("POST", "/api/login", `{"username":"driver","password":"correct horse"}`,
-		"X-Forwarded-Proto", "https")
+	rec := a.do("POST", "/api/login", driverLogin, "X-Forwarded-Proto", "https")
 	if rec.Code != http.StatusOK || a.cookie == nil {
 		t.Fatalf("login: %d %s", rec.Code, rec.Body)
 	}
 	if !a.cookie.HttpOnly || !a.cookie.Secure || a.cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("cookie flags: %+v", a.cookie)
 	}
-	if rec := a.do("GET", "/api/me", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"driver"`) {
+	if rec := a.do("GET", "/api/me", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"driver@example.com"`) {
 		t.Fatalf("me: %d %s", rec.Code, rec.Body)
 	}
 
@@ -166,7 +178,7 @@ func TestAuthHTTP(t *testing.T) {
 	}
 
 	// The other driver sees none of it, can't touch it, and can reuse the label.
-	b.do("POST", "/api/login", `{"username":"other","password":"correct horse"}`)
+	b.do("POST", "/api/login", `{"email":"other@example.com","password":"correct horse"}`)
 	if rec := b.do("GET", "/api/trips", ""); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
 		t.Fatalf("other's trips: %d %s", rec.Code, rec.Body)
 	}
@@ -192,19 +204,19 @@ func TestAuthHTTP(t *testing.T) {
 }
 
 func TestSignup(t *testing.T) {
-	s, _ := newTestStore(t) // "driver" exists
+	s, _ := newTestStore(t) // driver@example.com exists
 	cfg := &Config{Server: ServerConfig{Signup: true}}
-	h := NewServer(cfg, s, nil, nil).routes(http.NotFoundHandler())
+	h := NewServer(cfg, s, nil, nil, logMailer{}).routes(http.NotFoundHandler())
 	c := &client{t: t, h: h}
 
 	cases := []struct {
 		name, body string
 		want       int
 	}{
-		{"taken, any case", `{"username":"DRIVER","password":"long enough"}`, http.StatusConflict},
-		{"bad username", `{"username":"has space","password":"long enough"}`, http.StatusBadRequest},
-		{"short password", `{"username":"abebe","password":"short"}`, http.StatusBadRequest},
-		{"password over bcrypt's limit", `{"username":"abebe","password":"` + strings.Repeat("x", 73) + `"}`, http.StatusBadRequest},
+		{"taken, any case", `{"email":"DRIVER@example.com","password":"long enough"}`, http.StatusConflict},
+		{"not an email", `{"email":"abebe","password":"long enough"}`, http.StatusBadRequest},
+		{"short password", `{"email":"abebe@example.com","password":"short"}`, http.StatusBadRequest},
+		{"password over bcrypt's limit", `{"email":"abebe@example.com","password":"` + strings.Repeat("x", 73) + `"}`, http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		if rec := c.do("POST", "/api/signup", tc.body); rec.Code != tc.want {
@@ -215,18 +227,88 @@ func TestSignup(t *testing.T) {
 		t.Fatal("a failed sign-up must not sign in")
 	}
 
-	if rec := c.do("POST", "/api/signup", `{"username":" abebe ","password":"long enough"}`); rec.Code != http.StatusOK {
+	if rec := c.do("POST", "/api/signup", `{"email":" Abebe@Example.com ","password":"long enough"}`); rec.Code != http.StatusOK {
 		t.Fatalf("signup: %d %s", rec.Code, rec.Body)
 	}
-	if rec := c.do("GET", "/api/me", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"abebe"`) {
+	if rec := c.do("GET", "/api/me", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"abebe@example.com"`) {
 		t.Fatalf("signed in after sign-up: %d %s", rec.Code, rec.Body)
-	}
-	if _, err := s.Authenticate("abebe", "long enough"); err != nil {
-		t.Fatalf("new account can sign in: %v", err)
 	}
 
 	cfg.Server.Signup = false
-	if rec := c.do("POST", "/api/signup", `{"username":"closed","password":"long enough"}`); rec.Code != http.StatusForbidden {
+	if rec := c.do("POST", "/api/signup", `{"email":"closed@example.com","password":"long enough"}`); rec.Code != http.StatusForbidden {
 		t.Fatalf("closed sign-up: %d", rec.Code)
+	}
+}
+
+// captureMailer records sent emails so tests can follow the reset link.
+type captureMailer struct {
+	mu   sync.Mutex
+	sent []string // "to|text"
+	got  chan struct{}
+}
+
+func (m *captureMailer) Send(_ context.Context, to, _, text string) error {
+	m.mu.Lock()
+	m.sent = append(m.sent, to+"|"+text)
+	m.mu.Unlock()
+	m.got <- struct{}{}
+	return nil
+}
+
+var resetLink = regexp.MustCompile(`https://menged\.example/\?reset=(\S+)`)
+
+func TestPasswordReset(t *testing.T) {
+	s, uid := newTestStore(t)
+	mailer := &captureMailer{got: make(chan struct{}, 4)}
+	cfg := &Config{Server: ServerConfig{PublicURL: "https://menged.example"}}
+	h := NewServer(cfg, s, nil, nil, mailer).routes(http.NotFoundHandler())
+	phone := &client{t: t, h: h}
+	laptop := &client{t: t, h: h}
+	phone.do("POST", "/api/login", driverLogin)
+
+	// Unknown and known addresses get the same answer; only a real account gets mail.
+	if rec := laptop.do("POST", "/api/password/forgot", `{"email":"nobody@example.com"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("forgot, unknown: %d", rec.Code)
+	}
+	if rec := laptop.do("POST", "/api/password/forgot", `{"email":"Driver@Example.com"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("forgot, known: %d", rec.Code)
+	}
+	select {
+	case <-mailer.got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reset email sent")
+	}
+	mailer.mu.Lock()
+	sent := append([]string(nil), mailer.sent...)
+	mailer.mu.Unlock()
+	if len(sent) != 1 || !strings.HasPrefix(sent[0], "driver@example.com|") {
+		t.Fatalf("sent: %q", sent)
+	}
+	m := resetLink.FindStringSubmatch(sent[0])
+	if m == nil {
+		t.Fatalf("no link in %q", sent[0])
+	}
+	token, _ := url.QueryUnescape(m[1])
+
+	if rec := laptop.do("POST", "/api/password/reset", `{"token":"`+token+`","password":"short"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("short new password: %d", rec.Code)
+	}
+	if rec := laptop.do("POST", "/api/password/reset", `{"token":"`+token+`","password":"a new password"}`); rec.Code != http.StatusOK || laptop.cookie == nil {
+		t.Fatalf("reset: %d %s", rec.Code, rec.Body)
+	}
+	if rec := phone.do("GET", "/api/me", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a reset must sign other devices out: %d", rec.Code)
+	}
+	if _, err := s.Authenticate("driver@example.com", "a new password"); err != nil {
+		t.Fatalf("new password: %v", err)
+	}
+	if rec := laptop.do("POST", "/api/password/reset", `{"token":"`+token+`","password":"another password"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("link reused: %d", rec.Code)
+	}
+
+	expired, _ := s.CreateReset(uid)
+	_, _ = s.db.Exec(`UPDATE password_resets SET expires_at = ?`, time.Now().UTC().Add(-time.Minute).Format(time.RFC3339))
+	if _, err := s.UseReset(expired, "yet another one"); !errors.Is(err, errBadResetLink) {
+		t.Fatalf("expired link: %v", err)
 	}
 }

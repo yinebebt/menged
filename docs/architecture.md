@@ -69,10 +69,20 @@ ride-sharing backend and none of them are load-bearing here.
 Quotes are public: the estimate screen, sharing and the live meter need no account.
 Trips and saved places belong to a user, so those endpoints need a session.
 
-- Anyone can create an account from the sign-in sheet (`POST /api/signup`, rate-limited
-  like login) and is signed in straight away; `server.signup: false` closes it. There is
-  no email, so a forgotten password is reset on the server with `menged -user NAME`
-  (password from stdin), which also signs that user out everywhere.
+- Accounts are an email and a password. Anyone can create one from the sign-in sheet
+  (`POST /api/signup`, rate-limited like login) and is signed in straight away;
+  `server.signup: false` closes it. The email isn't confirmed at sign-up: a reset link
+  only works for whoever can read that inbox, so its owner can always take it back.
+- "Forgot password?" emails a single-use link valid for an hour (`/?reset=TOKEN`, built
+  from `server.public_url`, never from the request's `Host`). The answer is the same
+  whether or not the address has an account, and the email is sent after answering,
+  so neither tells who has signed up. Using the link sets the new password, signs the
+  user out everywhere, and signs this browser in. Reset tokens, like session tokens,
+  are stored only as SHA-256 hashes.
+- Email goes out through Mailtrap's API (`mail.provider: mailtrap`, optionally into a
+  Mailtrap testing inbox with `sandbox_id`), or to the server log (`log`, the default)
+  during development. If email is broken, `menged -reset-password EMAIL` sets a password
+  from the server.
 - Passwords are bcrypt hashes. Sign-in sets an `HttpOnly`, `SameSite=Lax` cookie
   (`Secure` behind TLS) holding a random token; only its SHA-256 is stored. Sessions
   last 90 days and are extended when used, so a phone in daily use stays signed in.
@@ -120,7 +130,8 @@ menged/
 ├── ors.go                       # HeiGIT ORS directions + Pelias geocoding
 ├── osrm.go                      # self-hosted OSRM directions
 ├── track.go (+ track_test.go)   # recorded GPS track → distance, moving and waiting time
-├── auth.go (+ auth_test.go)     # users, sessions, sign-in, per-user guard
+├── auth.go (+ auth_test.go)     # users, sessions, sign-in, password reset, per-user guard
+├── mail.go                      # Mailer: Mailtrap API, or the server log
 ├── store.go / schema.sql        # SQLite users, sessions, trips, places
 ├── config.example.yaml
 ├── web/                         # //go:embed static UI
@@ -128,9 +139,10 @@ menged/
 ```
 
 Tests cover the pure units (`fare.go`, `track.go`), the store against a temp SQLite
-file, sign-in and per-user isolation over HTTP, and the estimate/measure handlers with
+file, sign-in, password reset and per-user isolation over HTTP, and the estimate/measure handlers with
 a stub router. Deps: `modernc.org/sqlite`,
-`gopkg.in/yaml.v3`, `golang.org/x/crypto` (bcrypt), `golang.org/x/term` (password prompt).
+`gopkg.in/yaml.v3`, `golang.org/x/crypto` (bcrypt), `golang.org/x/term` (password prompt),
+`github.com/mailtrap/mailtrap-go` (email).
 
 ---
 

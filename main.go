@@ -28,7 +28,7 @@ var schemaSQL string
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	allowPublicListen := flag.Bool("allow-public-listen", false, "allow binding a non-loopback address (unsafe without a TLS reverse proxy)")
-	userName := flag.String("user", "", "add this user, or reset their password, then exit (password read from stdin)")
+	resetEmailFlag := flag.String("reset-password", "", "set a new password for the account with this email, then exit (password read from stdin)")
 	flag.Parse()
 
 	cfg, err := LoadConfig(*configPath)
@@ -36,15 +36,15 @@ func main() {
 		fatal("config", err)
 	}
 
-	if *userName != "" {
+	if *resetEmailFlag != "" {
 		store, err := OpenStore(cfg.Server.DBPath, schemaSQL)
 		if err != nil {
 			fatal("store", err)
 		}
-		err = setUserPassword(store, *userName)
+		err = resetPasswordCLI(store, *resetEmailFlag)
 		store.Close()
 		if err != nil {
-			fatal("user", err)
+			fatal("reset password", err)
 		}
 		return
 	}
@@ -71,6 +71,10 @@ func main() {
 	if err != nil {
 		fatal("geocoding", err)
 	}
+	mailer, err := NewMailer(cfg.Mail)
+	if err != nil {
+		fatal("mail", err)
+	}
 
 	web, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -79,7 +83,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Server.Listen,
-		Handler:           NewServer(cfg, store, router, geocoder).routes(http.FileServerFS(web)),
+		Handler:           NewServer(cfg, store, router, geocoder, mailer).routes(http.FileServerFS(web)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -105,12 +109,20 @@ func main() {
 	}
 }
 
-// setUserPassword reads a password (twice, hidden, on a terminal; one line when
-// piped) and creates the user or resets their password.
-func setUserPassword(store *Store, name string) error {
+// resetPasswordCLI is the fallback when reset emails can't be sent: it reads a new
+// password (twice, hidden, on a terminal; one line when piped) for an existing
+// account and signs that user out everywhere.
+func resetPasswordCLI(store *Store, email string) error {
+	u, err := store.UserByEmail(email)
+	if err != nil {
+		return err
+	}
+	if u == nil {
+		return fmt.Errorf("no account with email %q", email)
+	}
 	var password string
 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-		fmt.Fprintf(os.Stderr, "Password for %s: ", name)
+		fmt.Fprintf(os.Stderr, "New password for %s: ", u.Email)
 		first, err := term.ReadPassword(fd)
 		fmt.Fprintln(os.Stderr)
 		if err != nil {
@@ -133,15 +145,10 @@ func setUserPassword(store *Store, name string) error {
 		}
 		password = strings.TrimRight(line, "\r\n")
 	}
-	created, err := store.SetPassword(name, password)
-	if err != nil {
+	if err := store.SetPassword(u.ID, password); err != nil {
 		return err
 	}
-	if created {
-		fmt.Fprintf(os.Stderr, "Created user %s.\n", name)
-	} else {
-		fmt.Fprintf(os.Stderr, "Password reset for %s; their sessions were signed out.\n", name)
-	}
+	fmt.Fprintf(os.Stderr, "Password reset for %s; their sessions were signed out.\n", u.Email)
 	return nil
 }
 

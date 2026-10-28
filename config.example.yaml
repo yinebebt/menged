@@ -23,3 +23,11 @@ server:
   db_path:    ./menged.db
   map_style:  https://tiles.openfreemap.org/styles/liberty
   signup:     true   # anyone can create an account from the sign-in sheet; false closes it
+  public_url: ""     # e.g. https://menged.example.com; reset links point here (empty → http://listen)
+
+mail:
+  provider:   log    # log (write emails to the server log) | mailtrap
+  api_token:  ${MAILTRAP_API_TOKEN}
+  sandbox_id: 0      # non-zero: deliver into that Mailtrap testing inbox instead
+  from_email: no-reply@mail.example.com   # must be on a domain verified in Mailtrap
+  from_name:  menged

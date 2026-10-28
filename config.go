@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -13,6 +14,7 @@ type Config struct {
 	Routing   RoutingConfig   `yaml:"routing"`
 	Geocoding GeocodingConfig `yaml:"geocoding"`
 	Server    ServerConfig    `yaml:"server"`
+	Mail      MailConfig      `yaml:"mail"`
 }
 
 // FareConfig is the rate card.
@@ -40,12 +42,25 @@ type GeocodingConfig struct {
 	PeliasBaseURL string `yaml:"pelias_base_url"` // empty → https://api.heigit.org/pelias/v1
 }
 
-// ServerConfig is listen address, database path, map style, and whether sign-up is open.
+// ServerConfig is listen address, database path, map style, and sign-in settings.
 type ServerConfig struct {
 	Listen   string `yaml:"listen"`
 	DBPath   string `yaml:"db_path"`
 	MapStyle string `yaml:"map_style"`
 	Signup   bool   `yaml:"signup"` // anyone can create an account; default true
+	// PublicURL is where users reach menged; password reset links point there.
+	// Taken from config, never from the request's Host header, which a client sets.
+	PublicURL string `yaml:"public_url"`
+}
+
+// MailConfig selects how emails are sent: "mailtrap", or "log" (the default)
+// to write them to the server log.
+type MailConfig struct {
+	Provider  string `yaml:"provider"`
+	APIToken  string `yaml:"api_token"`
+	SandboxID int64  `yaml:"sandbox_id"` // non-zero: deliver into a Mailtrap testing inbox
+	FromEmail string `yaml:"from_email"`
+	FromName  string `yaml:"from_name"`
 }
 
 // LoadConfig reads path, expands ${ENV} references, and applies defaults.
@@ -68,6 +83,10 @@ func LoadConfig(path string) (*Config, error) {
 
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	cfg.Server.PublicURL = strings.TrimRight(cfg.Server.PublicURL, "/")
+	if cfg.Server.PublicURL == "" {
+		cfg.Server.PublicURL = "http://" + cfg.Server.Listen
 	}
 	return cfg, nil
 }
