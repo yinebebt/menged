@@ -146,11 +146,37 @@
   </div>
 </div>
 
+<!-- sign-in sheet: opened by anything that needs your account, then carries on -->
+<div id="sheet-login" class="overlay" hidden>
+  <form class="sheet" id="login-form" autocomplete="on">
+    <h2>Sign in</h2>
+    <div class="muted" id="login-reason">Your trips and saved places are private to you.</div>
+    <label>
+      <span class="sheet-caption">Username</span>
+      <input id="login-username" name="username" type="text" autocomplete="username"
+             autocapitalize="none" autocorrect="off" spellcheck="false" required>
+    </label>
+    <label>
+      <span class="sheet-caption">Password</span>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <p id="login-error" class="login-error" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" id="btn-login-cancel">Cancel</button>
+      <button type="submit" id="btn-login" class="primary">Sign in</button>
+    </div>
+  </form>
+</div>
+
 <!-- history panel -->
 <div id="history" class="panel" hidden>
   <header>
     <button id="btn-history-back" class="icon-btn">←</button>
     <div class="brand" id="history-title">History</div>
+    <div class="account">
+      <span class="muted" id="account-name"></span>
+      <button type="button" id="btn-logout" class="mini-btn">Sign out</button>
+    </div>
   </header>
   <div id="history-list-view">
     <div class="totals" id="history-totals"></div>

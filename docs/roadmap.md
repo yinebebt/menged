@@ -30,9 +30,8 @@ matters more than it sounds when mobile data is unreliable.
 
 **Trigger:** the moment the binary stops living on the device you're holding.
 
-**Work:** Tailscale, or HTTPS reverse proxy with Basic Auth (bind menged to
-`127.0.0.1`). See [architecture.md §5](architecture.md#5-exposing-it-beyond-localhost).
-Do not leave it on a public IP with no auth — the routing key is attached to your account.
+**Shipped:** HTTPS reverse proxy with rate limits in front of `127.0.0.1`, and sign-in
+in the app for trips and places. See [architecture.md §5](architecture.md#5-exposing-it-beyond-localhost).
 
 ### 1.3 Backups you don't have to think about
 
@@ -163,9 +162,11 @@ useful without the months of data that stages 1 and 2 produce.
 Be honest that this is a different product, and that most of the v1 decisions were correct
 *because* there was one user. Crossing this line means:
 
-- accounts and authentication (real ones, not a shared token)
-- Postgres instead of SQLite, once there are concurrent writers
-- per-user rate cards and per-user trip isolation
+- ~~accounts and per-user trip isolation~~ — shipped early, because adding the owner to
+  every trip was free before the schema was stable. Users are added from the CLI.
+- per-user rate cards (until then everyone shares the config's rate card)
+- password reset and user management that doesn't need a shell on the server
+- Postgres instead of SQLite, once there are enough drivers writing at once to matter
 - a hosted deployment with the operational responsibilities that follow
 
 At that point it's worth re-reading [background.md](background.md), because the earlier

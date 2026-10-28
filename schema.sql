@@ -1,5 +1,21 @@
+-- Users are added from the command line (menged -user NAME); there is no signup.
+CREATE TABLE IF NOT EXISTS users (
+    id              INTEGER PRIMARY KEY,
+    username        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash   TEXT    NOT NULL,          -- bcrypt
+    created_at      TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash      TEXT    PRIMARY KEY,       -- sha256 of the cookie value, hex
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at      TEXT    NOT NULL,
+    expires_at      TEXT    NOT NULL           -- RFC3339 UTC
+);
+
 CREATE TABLE IF NOT EXISTS trips (
     id              INTEGER PRIMARY KEY,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at      TEXT    NOT NULL,          -- RFC3339, local time
 
     pickup_label    TEXT,                      -- "Home", or blank for a raw map tap
@@ -36,10 +52,14 @@ CREATE TABLE IF NOT EXISTS trips (
     quoted_fare     REAL                       -- the quote given before starting, if any
 );
 
+CREATE INDEX IF NOT EXISTS trips_user_created ON trips (user_id, created_at);
+
 CREATE TABLE IF NOT EXISTS places (
     id         INTEGER PRIMARY KEY,
-    label      TEXT NOT NULL UNIQUE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label      TEXT NOT NULL,
     lat        REAL NOT NULL,
     lng        REAL NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, label)
 );

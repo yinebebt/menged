@@ -10,6 +10,7 @@ import (
 // Trip is a saved estimate plus the amount actually charged.
 type Trip struct {
 	ID        int64  `json:"id"`
+	UserID    int64  `json:"-"` // set by the server from the session, never by the client
 	CreatedAt string `json:"created_at"`
 
 	PickupLabel string  `json:"pickup_label,omitempty"`
@@ -50,6 +51,7 @@ type Trip struct {
 // Place is a named landmark for one-tap pin setting.
 type Place struct {
 	ID        int64   `json:"id"`
+	UserID    int64   `json:"-"`
 	Label     string  `json:"label"`
 	Lat       float64 `json:"lat"`
 	Lng       float64 `json:"lng"`
@@ -61,22 +63,18 @@ type Store struct {
 	db *sql.DB
 }
 
-// OpenStore opens path, enables WAL, and applies schema.
+// OpenStore opens path, enables WAL and foreign keys, and applies schema.
+//
+// There are no migrations before v1: a database from an older build must be moved
+// aside, and the schema is created fresh.
 func OpenStore(path, schema string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	// Set in the DSN so every connection the pool opens gets them, not just the first.
+	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=1")
 	if err != nil {
 		return nil, err
 	}
 	// Single connection: one writer, avoids SQLITE_BUSY for this workload.
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
-		db.Close()
-		return nil, err
-	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
@@ -126,9 +124,10 @@ func scanTrip(row interface{ Scan(...any) error }) (Trip, error) {
 	return t, nil
 }
 
-// ListTrips returns trips newest first.
-func (s *Store) ListTrips() ([]Trip, error) {
-	rows, err := s.db.Query(`SELECT ` + tripCols + ` FROM trips ORDER BY created_at DESC, id DESC`)
+// ListTrips returns userID's trips newest first.
+func (s *Store) ListTrips(userID int64) ([]Trip, error) {
+	rows, err := s.db.Query(`SELECT `+tripCols+` FROM trips WHERE user_id = ?
+		ORDER BY created_at DESC, id DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -145,16 +144,16 @@ func (s *Store) ListTrips() ([]Trip, error) {
 	return trips, rows.Err()
 }
 
-// InsertTrip persists t and sets t.ID and t.CreatedAt.
+// InsertTrip persists t for t.UserID and sets t.ID and t.CreatedAt.
 func (s *Store) InsertTrip(t *Trip) error {
 	t.CreatedAt = now()
-	res, err := s.db.Exec(`INSERT INTO trips (created_at, pickup_label, pickup_lat, pickup_lng,
+	res, err := s.db.Exec(`INSERT INTO trips (user_id, created_at, pickup_label, pickup_lat, pickup_lng,
 		dest_label, dest_lat, dest_lng, stop_label, stop_lat, stop_lng, waiting_min,
 		distance_km, duration_min, route_geometry, suggested_fare, actual_charged, multiplier,
 		rate_base, rate_per_km, rate_per_min, rate_per_wait_min, note,
 		started_at, ended_at, track, quoted_fare)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		t.CreatedAt, t.PickupLabel, t.PickupLat, t.PickupLng,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.UserID, t.CreatedAt, t.PickupLabel, t.PickupLat, t.PickupLng,
 		t.DestLabel, t.DestLat, t.DestLng, t.StopLabel, t.StopLat, t.StopLng, t.WaitingMin,
 		t.DistanceKM, t.DurationMin, t.RouteGeometry, t.SuggestedFare, t.ActualCharged, t.Multiplier,
 		t.RateBase, t.RatePerKM, t.RatePerMin, t.RatePerWaitMin, t.Note,
@@ -173,8 +172,9 @@ func nullIfEmpty(s string) any {
 	return s
 }
 
-// UpdateTrip sets actual_charged and/or note. Returns false if id is missing.
-func (s *Store) UpdateTrip(id int64, charged *float64, note *string) (bool, error) {
+// UpdateTrip sets actual_charged and/or note on one of userID's trips. Returns false
+// if there is no such trip for that user.
+func (s *Store) UpdateTrip(userID, id int64, charged *float64, note *string) (bool, error) {
 	set, args := "", []any{}
 	if charged != nil {
 		set += "actual_charged = ?"
@@ -190,8 +190,8 @@ func (s *Store) UpdateTrip(id int64, charged *float64, note *string) (bool, erro
 	if set == "" {
 		return false, nil
 	}
-	args = append(args, id)
-	res, err := s.db.Exec("UPDATE trips SET "+set+" WHERE id = ?", args...)
+	args = append(args, id, userID)
+	res, err := s.db.Exec("UPDATE trips SET "+set+" WHERE id = ? AND user_id = ?", args...)
 	if err != nil {
 		return false, err
 	}
@@ -199,9 +199,9 @@ func (s *Store) UpdateTrip(id int64, charged *float64, note *string) (bool, erro
 	return n > 0, err
 }
 
-// DeleteTrip removes a trip by id. Returns false if id is missing.
-func (s *Store) DeleteTrip(id int64) (bool, error) {
-	res, err := s.db.Exec(`DELETE FROM trips WHERE id = ?`, id)
+// DeleteTrip removes one of userID's trips. Returns false if there is no such trip.
+func (s *Store) DeleteTrip(userID, id int64) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM trips WHERE id = ? AND user_id = ?`, id, userID)
 	if err != nil {
 		return false, err
 	}
@@ -209,9 +209,10 @@ func (s *Store) DeleteTrip(id int64) (bool, error) {
 	return n > 0, err
 }
 
-// ListPlaces returns saved places sorted by label.
-func (s *Store) ListPlaces() ([]Place, error) {
-	rows, err := s.db.Query(`SELECT id, label, lat, lng, created_at FROM places ORDER BY label`)
+// ListPlaces returns userID's saved places sorted by label.
+func (s *Store) ListPlaces(userID int64) ([]Place, error) {
+	rows, err := s.db.Query(`SELECT id, label, lat, lng, created_at FROM places
+		WHERE user_id = ? ORDER BY label`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -228,11 +229,11 @@ func (s *Store) ListPlaces() ([]Place, error) {
 	return places, rows.Err()
 }
 
-// InsertPlace persists p and sets p.ID and p.CreatedAt.
+// InsertPlace persists p for p.UserID and sets p.ID and p.CreatedAt.
 func (s *Store) InsertPlace(p *Place) error {
 	p.CreatedAt = now()
-	res, err := s.db.Exec(`INSERT INTO places (label, lat, lng, created_at) VALUES (?,?,?,?)`,
-		p.Label, p.Lat, p.Lng, p.CreatedAt)
+	res, err := s.db.Exec(`INSERT INTO places (user_id, label, lat, lng, created_at)
+		VALUES (?,?,?,?,?)`, p.UserID, p.Label, p.Lat, p.Lng, p.CreatedAt)
 	if err != nil {
 		return err
 	}
@@ -240,9 +241,9 @@ func (s *Store) InsertPlace(p *Place) error {
 	return err
 }
 
-// DeletePlace removes a place by id. Returns false if id is missing.
-func (s *Store) DeletePlace(id int64) (bool, error) {
-	res, err := s.db.Exec(`DELETE FROM places WHERE id = ?`, id)
+// DeletePlace removes one of userID's places. Returns false if there is no such place.
+func (s *Store) DeletePlace(userID, id int64) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM places WHERE id = ? AND user_id = ?`, id, userID)
 	if err != nil {
 		return false, err
 	}

@@ -36,13 +36,16 @@ Health: `GET /api/health` → `{"status":"ok"}`.
 
 ## Deploy (VPS)
 
-Keep menged on loopback; put TLS + **Basic Auth** on the reverse proxy (no in-app tokens). The process refuses a non-loopback listen unless you pass `-allow-public-listen`.
+Keep menged on loopback behind a TLS reverse proxy. The process refuses a non-loopback listen unless you pass `-allow-public-listen`.
 
 1. `go build -o menged .` — ship binary + `config.yaml`; `ORS_API_KEY` in the environment only.
 2. `server.listen: 127.0.0.1:8080`
-3. nginx/Caddy: HTTPS + Basic Auth → `127.0.0.1:8080`
-4. systemd (or similar). Probe: `curl -fsS -u user:pass https://your.host/api/health`
-5. Backup `menged.db` (and `-wal` / `-shm` if present)
+3. nginx/Caddy: HTTPS → `127.0.0.1:8080`, setting `X-Forwarded-Proto`; rate-limit `/api/login` and the routing endpoints.
+4. Add yourself: `./menged -user NAME` (asks for a password; run it again to reset one).
+5. systemd (or similar). Probe: `curl -fsS https://your.host/api/health`
+6. Backup `menged.db` (and `-wal` / `-shm` if present)
+
+Before v1 there are no migrations: when the schema changes, move the old `menged.db` aside and let the new build create a fresh one.
 
 Details: [architecture.md §5](docs/architecture.md#5-exposing-it-beyond-localhost).
 
@@ -66,5 +69,5 @@ Details: [architecture.md §5](docs/architecture.md#5-exposing-it-beyond-localho
 
 ## Non-goals
 
-Matching, dispatch, multi-driver accounts, passenger apps, in-app payments, surge
+Matching, dispatch, signup or per-driver rate cards, passenger apps, in-app payments, surge
 automation, microservices. See [docs/roadmap.md](docs/roadmap.md).

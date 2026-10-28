@@ -167,33 +167,38 @@ Small enough to list completely.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/` | serves the single-page app (embedded static files) |
-| `GET` | `/api/health` | liveness probe (`{"status":"ok"}`), open even when auth is on |
+| `GET` | `/api/health` | liveness probe (`{"status":"ok"}`) |
 | `GET` | `/api/config` | fare rates, map style/camera, `geocode` flag |
 | `POST` | `/api/estimate` | `{pickup:{lat,lng}, stop?:{lat,lng}, dest:{lat,lng}, waiting_min?, multiplier?}` → `{distance_km, duration_min, geometry, fare, breakdown}` |
 | `POST` | `/api/measure` | `{track:[{lat,lng,t,acc}], multiplier?, route?}` → measured `{distance_km, duration_min, waiting_min, rough, method, geometry, track, start, end, fare, breakdown}` |
 | `GET` | `/api/geocode` | `?q=&lat=&lng=` → place hits (when geocoding configured) |
 | `GET` | `/api/reverse` | `?lat=&lng=` → `{label}` for a pin |
-| `GET` | `/api/trips` | list, newest first |
-| `POST` | `/api/trips` | save a trip |
-| `PATCH` | `/api/trips/{id}` | edit `actual_charged` / `note` |
-| `DELETE` | `/api/trips/{id}` | delete a trip |
-| `GET` | `/api/places` | list saved places |
-| `POST` | `/api/places` | add one |
-| `DELETE` | `/api/places/{id}` | remove one |
+| `POST` | `/api/login` | `{username, password}` → `{username}` and a session cookie |
+| `POST` | `/api/logout` | ends the session |
+| `GET` | `/api/me` | 🔒 `{username}`, or 401 when signed out |
+| `GET` | `/api/trips` | 🔒 your trips, newest first |
+| `POST` | `/api/trips` | 🔒 save a trip |
+| `PATCH` | `/api/trips/{id}` | 🔒 edit `actual_charged` / `note` |
+| `DELETE` | `/api/trips/{id}` | 🔒 delete a trip |
+| `GET` | `/api/places` | 🔒 your saved places |
+| `POST` | `/api/places` | 🔒 add one |
+| `DELETE` | `/api/places/{id}` | 🔒 remove one |
+
+🔒 needs a session; another user's trip or place answers 404.
 
 **The fare is calculated on the server**, in `/api/estimate`, and the client only
 displays it. The old ride-sharing backend let the client send its own distance and price
 and stored them unquestioned — one number, one owner, server side.
 
-No in-app auth: bind to `127.0.0.1` locally; on a VPS use reverse-proxy Basic Auth — see
-[architecture.md §5](architecture.md#5-exposing-it-beyond-localhost).
+Sign-in and hosting: [architecture.md §2](architecture.md#authentication--in-the-app-for-personal-data-only)
+and [§5](architecture.md#5-exposing-it-beyond-localhost).
 
 ---
 
 ## 7. Explicitly not in v1
 
 - More than one planned stop (unplanned stops are captured by trip recording)
-- Accounts, login, or more than one driver
+- Signup, password reset, or per-driver rate cards (users are added from the CLI)
 - Passenger-facing anything; payments, receipts, SMS
 - Automatic surge / time-of-day pricing (multiplier stays manual)
 - Offline routing or offline map tiles

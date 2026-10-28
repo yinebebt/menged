@@ -4,6 +4,8 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   cfg: null,
+  user: null,         // {username} when signed in
+  afterLogin: null,   // what to carry on with once the sign-in sheet succeeds
   pickup: null,       // {lat, lng, label?}
   dest: null,
   stop: null,         // optional point between pickup and dest
@@ -45,7 +47,10 @@ async function api(path, opts = {}) {
   if (!resp.ok) {
     let msg = resp.statusText;
     try { msg = (await resp.json()).error || msg; } catch (_) {}
-    throw new Error(msg);
+    if (resp.status === 401 && path !== '/api/login') setUser(null);
+    const err = new Error(msg);
+    err.status = resp.status;
+    throw err;
   }
   return resp.status === 204 ? null : resp.json();
 }
@@ -54,6 +59,9 @@ let map;
 
 async function init() {
   state.cfg = await api('/api/config');
+  try {
+    setUser(await api('/api/me'));
+  } catch (_) { /* signed out: quotes still work */ }
   $('save-currency').textContent = state.cfg.rates.currency;
 
   const c = state.cfg.map_center;
@@ -683,12 +691,14 @@ function decodePolyline(str) {
 }
 
 async function loadPlaces() {
-  try {
-    state.places = await api('/api/places');
-  } catch (_) {
-    state.places = [];
+  state.places = [];
+  if (state.user) {
+    try {
+      state.places = await api('/api/places');
+    } catch (_) { /* no chips; the map still works */ }
   }
   renderChips();
+  renderPoints();
 }
 
 function renderChips() {
@@ -711,12 +721,7 @@ function renderChips() {
     x.title = 'Remove place';
     x.setAttribute('aria-label', 'Remove ' + p.label);
     x.textContent = '×';
-    x.onclick = () => {
-      if (!confirm('Remove saved place "' + p.label + '"?')) return;
-      api('/api/places/' + p.id, { method: 'DELETE' })
-        .then(() => loadPlaces())
-        .catch((err) => alert(err.message));
-    };
+    x.onclick = () => removePlace(p);
 
     chip.appendChild(use);
     chip.appendChild(x);
@@ -724,9 +729,20 @@ function renderChips() {
   }
 }
 
+function removePlace(p) {
+  if (!confirm('Remove saved place "' + p.label + '"?')) return;
+  api('/api/places/' + p.id, { method: 'DELETE' })
+    .then(() => loadPlaces())
+    .catch((err) => {
+      if (err.status === 401) requireUser(() => removePlace(p));
+      else alert(err.message);
+    });
+}
+
 async function savePlace(kind) {
   const pt = state[kind];
   if (!pt) return;
+  if (!state.user) return requireUser(() => savePlace(kind), 'Sign in to save places.');
   const label = prompt('Name this place:');
   if (!label || !label.trim()) return;
   try {
@@ -736,14 +752,15 @@ async function savePlace(kind) {
     });
     state[kind] = { lat: p.lat, lng: p.lng, label: p.label };
     await loadPlaces();
-    renderPoints();
   } catch (err) {
+    if (err.status === 401) return requireUser(() => savePlace(kind));
     alert(err.message);
   }
 }
 
 function openSaveSheet() {
   if (!state.estimate || state.saving) return;
+  if (!state.user) return requireUser(openSaveSheet, 'Sign in to save trips.');
   const key = estimateKey(state.estimate);
   if (key && key === state.savedKey) {
     showToast('Already saved');
@@ -804,7 +821,8 @@ async function saveTrip() {
     updateSaveButton();
   } catch (err) {
     $('sheet-save').hidden = false;
-    alert(err.message);
+    if (err.status === 401) requireUser(saveTrip); // session ended; the sheet keeps its values
+    else alert(err.message);
   } finally {
     state.saving = false;
     btn.disabled = false;
@@ -814,6 +832,7 @@ async function saveTrip() {
 
 async function openHistory(opts) {
   opts = opts || {};
+  if (!state.user) return requireUser(() => openHistory(opts), 'Sign in to see your trips.');
   $('history').hidden = false;
   if (!opts.keepDetail) closeTripDetail();
 
@@ -823,6 +842,10 @@ async function openHistory(opts) {
   try {
     trips = await api('/api/trips');
   } catch (err) {
+    if (err.status === 401) {
+      $('history').hidden = true;
+      return requireUser(() => openHistory(opts));
+    }
     alert(err.message);
     return;
   }
@@ -890,7 +913,8 @@ async function saveEdit() {
     $('sheet-edit').hidden = true;
     await openHistory({ keepDetail: !!state.viewingTrip });
   } catch (err) {
-    alert(err.message);
+    if (err.status === 401) requireUser(saveEdit); // the edit sheet keeps its values
+    else alert(err.message);
   }
 }
 
@@ -905,7 +929,79 @@ function deleteTrip() {
       state.editingTripId = null;
       return openHistory();
     })
-    .catch((err) => alert(err.message));
+    .catch((err) => {
+      if (err.status === 401) requireUser(deleteTrip);
+      else alert(err.message);
+    });
+}
+
+// ---- account ----
+// Quotes are public. Anything personal goes through requireUser, which opens the
+// sign-in sheet when needed and then carries on with what was asked for.
+
+function setUser(u) {
+  state.user = u && u.username ? { username: u.username } : null;
+  $('account-name').textContent = state.user ? state.user.username : '';
+  $('btn-logout').hidden = !state.user;
+}
+
+function requireUser(then, reason) {
+  if (state.user) return then();
+  state.afterLogin = then;
+  $('login-reason').textContent = reason || 'Your session ended. Sign in again to carry on.';
+  $('login-error').hidden = true;
+  $('login-password').value = '';
+  $('sheet-login').hidden = false;
+  const field = $('login-username').value ? 'login-password' : 'login-username';
+  $(field).focus();
+}
+
+async function signIn(e) {
+  e.preventDefault();
+  const btn = $('btn-login');
+  btn.disabled = true;
+  try {
+    setUser(await api('/api/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: $('login-username').value.trim(),
+        password: $('login-password').value,
+      }),
+    }));
+    $('sheet-login').hidden = true;
+    $('login-password').value = '';
+    await loadPlaces();
+    const then = state.afterLogin;
+    state.afterLogin = null;
+    if (then) then();
+  } catch (err) {
+    $('login-error').textContent = err.message;
+    $('login-error').hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// signOut also ends a recording in progress and forgets a priced one, so whoever
+// signs in next on this phone can't save another driver's trip as theirs.
+async function signOut() {
+  if (state.rec) {
+    if (!confirm('Signing out discards the trip being recorded.')) return;
+    stopRecording();
+    state.rec = null;
+    forgetStoredTrip();
+    setRecordingUI(false);
+  }
+  state.measured = null;
+  state.savedKey = null;
+  try {
+    await api('/api/logout', { method: 'POST' });
+  } catch (_) { /* the cookie is cleared server-side or already gone */ }
+  setUser(null);
+  await loadPlaces();
+  $('history').hidden = true;
+  closeTripDetail();
+  showToast('Signed out');
 }
 
 // ---- trip recording ----
@@ -932,6 +1028,8 @@ function forgetStoredTrip() {
 
 function startTrip() {
   if (state.rec) return;
+  // Recording itself is local, but the trip can only be saved to an account.
+  if (!state.user) return requireUser(startTrip, 'Sign in to record and save trips.');
   if (!navigator.geolocation) {
     showToast('No GPS on this device');
     return;
@@ -1477,6 +1575,12 @@ $('btn-save-cancel').onclick = () => { $('sheet-save').hidden = true; };
 $('btn-save-confirm').onclick = saveTrip;
 
 $('btn-history').onclick = () => openHistory();
+$('login-form').addEventListener('submit', signIn);
+$('btn-login-cancel').onclick = () => {
+  state.afterLogin = null;
+  $('sheet-login').hidden = true;
+};
+$('btn-logout').onclick = signOut;
 $('btn-history-back').onclick = () => {
   if (!$('trip-detail').hidden) {
     closeTripDetail();

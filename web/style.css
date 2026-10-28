@@ -606,6 +606,10 @@ html, body {
   padding: 10px 12px;
 }
 .panel header .brand { flex: 1; }
+.account { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+
+#sheet-login { z-index: 25; } /* above the history panel and the other sheets */
+.login-error { color: var(--red); font-size: 13px; }
 
 .totals {
   display: flex;

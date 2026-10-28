@@ -38,18 +38,24 @@ func (s *Server) routes(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/geocode", s.geocode)
 	mux.HandleFunc("GET /api/reverse", s.reverse)
 
-	mux.HandleFunc("GET /api/trips", s.listTrips)
-	mux.HandleFunc("POST /api/trips", s.saveTrip)
-	mux.HandleFunc("PATCH /api/trips/{id}", s.editTrip)
-	mux.HandleFunc("DELETE /api/trips/{id}", s.deleteTrip)
+	mux.HandleFunc("POST /api/login", s.login)
+	mux.HandleFunc("POST /api/logout", s.logout)
+	mux.HandleFunc("GET /api/me", s.requireUser(s.me))
 
-	mux.HandleFunc("GET /api/places", s.listPlaces)
-	mux.HandleFunc("POST /api/places", s.addPlace)
-	mux.HandleFunc("DELETE /api/places/{id}", s.deletePlace)
+	mux.HandleFunc("GET /api/trips", s.requireUser(s.listTrips))
+	mux.HandleFunc("POST /api/trips", s.requireUser(s.saveTrip))
+	mux.HandleFunc("PATCH /api/trips/{id}", s.requireUser(s.editTrip))
+	mux.HandleFunc("DELETE /api/trips/{id}", s.requireUser(s.deleteTrip))
+
+	mux.HandleFunc("GET /api/places", s.requireUser(s.listPlaces))
+	mux.HandleFunc("POST /api/places", s.requireUser(s.addPlace))
+	mux.HandleFunc("DELETE /api/places/{id}", s.requireUser(s.deletePlace))
 
 	mux.Handle("GET /", noCache(static))
 
-	return mux
+	// Refuses state-changing requests from other sites, including sibling
+	// subdomains that SameSite cookies would treat as the same site.
+	return http.NewCrossOriginProtection().Handler(mux)
 }
 
 func noCache(next http.Handler) http.Handler {
@@ -291,8 +297,8 @@ func (s *Server) measure(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) listTrips(w http.ResponseWriter, r *http.Request) {
-	trips, err := s.store.ListTrips()
+func (s *Server) listTrips(w http.ResponseWriter, r *http.Request, u *User) {
+	trips, err := s.store.ListTrips(u.ID)
 	if err != nil {
 		s.serverError(w, "list trips", err)
 		return
@@ -300,7 +306,7 @@ func (s *Server) listTrips(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, trips)
 }
 
-func (s *Server) saveTrip(w http.ResponseWriter, r *http.Request) {
+func (s *Server) saveTrip(w http.ResponseWriter, r *http.Request, u *User) {
 	var t Trip
 	if err := decodeJSON(w, r, &t); err != nil {
 		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
@@ -341,6 +347,7 @@ func (s *Server) saveTrip(w http.ResponseWriter, r *http.Request) {
 	rates := s.cfg.Rates()
 	t.RateBase, t.RatePerKM, t.RatePerMin = rates.BaseFare, rates.PerKM, rates.PerMinute
 	t.RatePerWaitMin = rates.PerWaitMin
+	t.UserID = u.ID
 
 	if err := s.store.InsertTrip(&t); err != nil {
 		s.serverError(w, "save trip", err)
@@ -355,7 +362,7 @@ type tripPatch struct {
 	Note          *string  `json:"note"`
 }
 
-func (s *Server) editTrip(w http.ResponseWriter, r *http.Request) {
+func (s *Server) editTrip(w http.ResponseWriter, r *http.Request, u *User) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad id")
@@ -370,7 +377,7 @@ func (s *Server) editTrip(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "nothing to update")
 		return
 	}
-	ok, err := s.store.UpdateTrip(id, patch.ActualCharged, patch.Note)
+	ok, err := s.store.UpdateTrip(u.ID, id, patch.ActualCharged, patch.Note)
 	if err != nil {
 		s.serverError(w, "edit trip", err)
 		return
@@ -382,13 +389,13 @@ func (s *Server) editTrip(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) deleteTrip(w http.ResponseWriter, r *http.Request) {
+func (s *Server) deleteTrip(w http.ResponseWriter, r *http.Request, u *User) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	ok, err := s.store.DeleteTrip(id)
+	ok, err := s.store.DeleteTrip(u.ID, id)
 	if err != nil {
 		s.serverError(w, "delete trip", err)
 		return
@@ -400,8 +407,8 @@ func (s *Server) deleteTrip(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) listPlaces(w http.ResponseWriter, r *http.Request) {
-	places, err := s.store.ListPlaces()
+func (s *Server) listPlaces(w http.ResponseWriter, r *http.Request, u *User) {
+	places, err := s.store.ListPlaces(u.ID)
 	if err != nil {
 		s.serverError(w, "list places", err)
 		return
@@ -409,7 +416,7 @@ func (s *Server) listPlaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, places)
 }
 
-func (s *Server) addPlace(w http.ResponseWriter, r *http.Request) {
+func (s *Server) addPlace(w http.ResponseWriter, r *http.Request, u *User) {
 	var p Place
 	if err := decodeJSON(w, r, &p); err != nil {
 		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
@@ -424,6 +431,7 @@ func (s *Server) addPlace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, ErrOutsideArea.Error())
 		return
 	}
+	p.UserID = u.ID
 	if err := s.store.InsertPlace(&p); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			writeError(w, http.StatusConflict, "a place with that name already exists")
@@ -435,13 +443,13 @@ func (s *Server) addPlace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, p)
 }
 
-func (s *Server) deletePlace(w http.ResponseWriter, r *http.Request) {
+func (s *Server) deletePlace(w http.ResponseWriter, r *http.Request, u *User) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	ok, err := s.store.DeletePlace(id)
+	ok, err := s.store.DeletePlace(u.ID, id)
 	if err != nil {
 		s.serverError(w, "delete place", err)
 		return

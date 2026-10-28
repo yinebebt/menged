@@ -60,14 +60,29 @@ shell caching earns its keep ([roadmap.md](roadmap.md) §1.4).
 
 ### Redis, MinIO, Casbin, JWT, WebSockets, worker pools — **no**
 
-There is no concurrency to manage, no second user to authorise, no file to store, and no
+There is no concurrency to manage, no roles to authorise (each user only sees their own rows), no file to store, and no
 real-time channel in the workflow. Every one of these was load-bearing in the old
 ride-sharing backend and none of them are load-bearing here.
 
-### Authentication — **no** (in v1)
+### Authentication — **in the app**, for personal data only
 
-It binds to `127.0.0.1`. If it's only reachable from the machine it runs on, a login
-screen protects nothing and costs you a password prompt every time you're in traffic.
+Quotes are public: the estimate screen, sharing and the live meter need no account.
+Trips and saved places belong to a user, so those endpoints need a session.
+
+- Users are added on the server with `menged -user NAME` (password from stdin; the same
+  command resets a password and signs that user out). There is no signup.
+- Passwords are bcrypt hashes. Sign-in sets an `HttpOnly`, `SameSite=Lax` cookie
+  (`Secure` behind TLS) holding a random token; only its SHA-256 is stored. Sessions
+  last 90 days and are extended when used, so a phone in daily use stays signed in.
+- Cross-site writes are refused by Go's `http.CrossOriginProtection` (`Sec-Fetch-Site`,
+  falling back to `Origin` vs `Host`). That also covers the sibling subdomains that
+  `SameSite` treats as the same site. Only the personal endpoints look up the session,
+  so static files and public quotes never touch the sessions table.
+- The web UI asks for sign-in at the moment it's needed (History, Save, a saved place,
+  Start trip) and then carries on. A 401 later, e.g. after a password reset, does the same.
+
+Basic Auth at the proxy was tried first and dropped: the browser owns its prompt, so the
+app can't ask at the right moment, can't sign out, and installed web apps re-prompt.
 
 ### Routing behind an interface — **yes**, and this is the one abstraction worth having
 
@@ -103,15 +118,17 @@ menged/
 ├── ors.go                       # HeiGIT ORS directions + Pelias geocoding
 ├── osrm.go                      # self-hosted OSRM directions
 ├── track.go (+ track_test.go)   # recorded GPS track → distance, moving and waiting time
-├── store.go / schema.sql        # SQLite trips + places
+├── auth.go (+ auth_test.go)     # users, sessions, sign-in, per-user guard
+├── store.go / schema.sql        # SQLite users, sessions, trips, places
 ├── config.example.yaml
 ├── web/                         # //go:embed static UI
 └── docs/
 ```
 
 Tests cover the pure units (`fare.go`, `track.go`), the store against a temp SQLite
-file, and the estimate/measure handlers with a stub router. Deps: `modernc.org/sqlite`,
-`gopkg.in/yaml.v3`.
+file, sign-in and per-user isolation over HTTP, and the estimate/measure handlers with
+a stub router. Deps: `modernc.org/sqlite`,
+`gopkg.in/yaml.v3`, `golang.org/x/crypto` (bcrypt), `golang.org/x/term` (password prompt).
 
 ---
 
@@ -145,12 +162,13 @@ You will eventually want this on your phone while the binary lives on a small se
 In rough order of preference:
 
 1. **Tailscale** — private IP only, no public exposure. Best effort-to-safety ratio.
-2. **Reverse proxy + Basic Auth (recommended for a public VPS)** — bind menged to
-   `127.0.0.1:8080`, put nginx or Caddy in front with HTTPS and `auth_basic`. There is
-   no in-app bearer token; protect the host at the proxy.
-3. **A real login** — only if a second person ever uses it; see [roadmap.md](roadmap.md).
+2. **Reverse proxy with TLS (what the VPS runs)** — bind menged to `127.0.0.1:8080`
+   and put nginx or Caddy in front with HTTPS. Sign-in is in the app (§2), so the proxy
+   doesn't need `auth_basic`, but it should rate-limit `/api/login` (password guessing)
+   and the endpoints that spend routing quota: `/api/estimate`, `/api/measure`,
+   `/api/geocode`, `/api/reverse`.
 
-Do not put it on a public IP with no auth. The routing quota is attached to your key.
+Session cookies are only `Secure` when the proxy sets `X-Forwarded-Proto: https`.
 Startup refuses a non-loopback listen unless you pass `-allow-public-listen` (which still logs a warning).
 
 ---
