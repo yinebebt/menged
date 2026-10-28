@@ -293,14 +293,18 @@ func TestPasswordReset(t *testing.T) {
 	if rec := laptop.do("POST", "/api/password/reset", `{"token":"`+token+`","password":"short"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("short new password: %d", rec.Code)
 	}
-	if rec := laptop.do("POST", "/api/password/reset", `{"token":"`+token+`","password":"a new password"}`); rec.Code != http.StatusOK || laptop.cookie == nil {
+	rec := laptop.do("POST", "/api/password/reset", `{"token":"`+token+`","password":"a new password"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"driver@example.com"`) {
 		t.Fatalf("reset: %d %s", rec.Code, rec.Body)
+	}
+	if laptop.cookie != nil {
+		t.Fatal("a reset must not sign in; the new password is used to sign in")
 	}
 	if rec := phone.do("GET", "/api/me", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("a reset must sign other devices out: %d", rec.Code)
 	}
-	if _, err := s.Authenticate("driver@example.com", "a new password"); err != nil {
-		t.Fatalf("new password: %v", err)
+	if rec := laptop.do("POST", "/api/login", `{"email":"driver@example.com","password":"a new password"}`); rec.Code != http.StatusOK {
+		t.Fatalf("sign in with the new password: %d", rec.Code)
 	}
 	if rec := laptop.do("POST", "/api/password/reset", `{"token":"`+token+`","password":"another password"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("link reused: %d", rec.Code)

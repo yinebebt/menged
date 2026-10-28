@@ -17,8 +17,21 @@
 
 <header id="topbar">
   <div class="brand">መንገድ <span>menged</span></div>
-  <button id="btn-history" class="icon-btn" title="Trip history">☰ History</button>
+  <button id="btn-account" class="icon-btn account-btn" type="button" aria-haspopup="menu" aria-expanded="false">
+    <span class="avatar" id="account-avatar" hidden></span>
+    <span id="account-label">Sign in</span>
+  </button>
 </header>
+
+<!-- account menu, under the top-bar button while signed in -->
+<div id="account-menu" class="account-menu" role="menu" hidden>
+  <div class="account-menu-head">
+    <span class="muted">Signed in as</span>
+    <span class="account-email" id="account-email"></span>
+  </div>
+  <button type="button" role="menuitem" id="menu-history">Trip history</button>
+  <button type="button" role="menuitem" id="menu-logout" class="danger">Sign out</button>
+</div>
 
 <div id="chips" class="chips" hidden></div>
 
@@ -148,31 +161,35 @@
 
 <!-- sign-in sheet: opened by anything that needs your account, then carries on -->
 <div id="sheet-login" class="overlay" hidden>
-  <form class="sheet" id="login-form" autocomplete="on">
-    <h2 id="login-title">Sign in</h2>
-    <div class="muted" id="login-reason">Your trips and saved places are private to you.</div>
+  <form class="sheet login-sheet" id="login-form" autocomplete="on">
+    <div class="sheet-head">
+      <h2 id="login-title">Sign in</h2>
+      <button type="button" class="mini-btn" id="btn-login-close" aria-label="Close">✕</button>
+    </div>
+    <p class="muted login-reason" id="login-reason"></p>
     <label id="login-email-wrap">
       <span class="sheet-caption">Email</span>
       <input id="login-email" name="email" type="email" inputmode="email" autocomplete="username"
              autocapitalize="none" autocorrect="off" spellcheck="false">
     </label>
     <label id="login-password-wrap">
-      <span class="sheet-caption">Password <span class="muted" id="login-hint" hidden>at least 8 characters</span></span>
-      <input id="login-password" name="password" type="password" autocomplete="current-password">
+      <span class="sheet-caption">Password</span>
+      <span class="password-field">
+        <input id="login-password" name="password" type="password" autocomplete="current-password">
+        <button type="button" class="link-btn" id="btn-show-password" aria-label="Show password">Show</button>
+      </span>
+      <span class="field-hint muted" id="login-hint" hidden>At least 8 characters.</span>
     </label>
     <label id="login-repeat-wrap" hidden>
-      <span class="sheet-caption">Password again</span>
+      <span class="sheet-caption">Confirm password</span>
       <input id="login-repeat" name="password-repeat" type="password" autocomplete="new-password">
     </label>
-    <p id="login-error" class="login-error" hidden></p>
-    <div class="sheet-actions">
-      <button type="button" id="btn-login-cancel">Cancel</button>
-      <button type="submit" id="btn-login" class="primary">Sign in</button>
-    </div>
-    <p class="login-links muted">
+    <p id="login-error" class="login-error" role="alert" hidden></p>
+    <button type="submit" id="btn-login" class="primary btn-block">Sign in</button>
+    <p class="login-links" id="login-links">
       <button type="button" class="link-btn" id="btn-login-forgot">Forgot password?</button>
       <span id="login-switch">
-        <span id="login-switch-text">New here?</span>
+        <span class="muted" id="login-switch-text">New here?</span>
         <button type="button" class="link-btn" id="btn-login-switch">Create an account</button>
       </span>
     </p>
@@ -184,10 +201,6 @@
   <header>
     <button id="btn-history-back" class="icon-btn">←</button>
     <div class="brand" id="history-title">History</div>
-    <div class="account">
-      <span class="muted" id="account-name"></span>
-      <button type="button" id="btn-logout" class="mini-btn">Sign out</button>
-    </div>
   </header>
   <div id="history-list-view">
     <div class="totals" id="history-totals"></div>

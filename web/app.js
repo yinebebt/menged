@@ -46,15 +46,17 @@ async function api(path, opts = {}) {
     opts.headers['Content-Type'] = 'application/json';
   }
   const resp = await fetch(path, opts);
+  // Some answers have no body (204, and 202 from forgot-password).
+  const text = await resp.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch (_) { /* not JSON: an nginx error page */ }
   if (!resp.ok) {
-    let msg = resp.statusText;
-    try { msg = (await resp.json()).error || msg; } catch (_) {}
     if (resp.status === 401 && path !== '/api/login') setUser(null);
-    const err = new Error(msg);
+    const err = new Error((body && body.error) || resp.statusText || 'Request failed');
     err.status = resp.status;
     throw err;
   }
-  return resp.status === 204 ? null : resp.json();
+  return body;
 }
 
 let map;
@@ -944,8 +946,29 @@ function deleteTrip() {
 
 function setUser(u) {
   state.user = u && u.email ? { email: u.email } : null;
-  $('account-name').textContent = state.user ? state.user.email : '';
-  $('btn-logout').hidden = !state.user;
+  const signedIn = !!state.user;
+  $('account-label').hidden = signedIn;
+  $('account-avatar').hidden = !signedIn;
+  $('account-avatar').textContent = signedIn ? state.user.email[0] : '';
+  $('btn-account').classList.toggle('signed-in', signedIn);
+  $('btn-account').title = signedIn ? state.user.email : 'Sign in';
+  $('account-email').textContent = signedIn ? state.user.email : '';
+  if (!signedIn) closeAccountMenu();
+}
+
+function toggleAccountMenu() {
+  if (!state.user) {
+    openLogin('signin', 'Sign in to keep your trips and saved places.');
+    return;
+  }
+  const open = $('account-menu').hidden;
+  $('account-menu').hidden = !open;
+  $('btn-account').setAttribute('aria-expanded', String(open));
+}
+
+function closeAccountMenu() {
+  $('account-menu').hidden = true;
+  $('btn-account').setAttribute('aria-expanded', 'false');
 }
 
 function requireUser(then, reason) {
@@ -954,27 +977,37 @@ function requireUser(then, reason) {
   openLogin('signin', reason || 'Your session ended. Sign in again to carry on.');
 }
 
-// The sign-in sheet's four forms. repeat asks for the password twice: there is no
-// other way to catch a typo in a new password.
+// The sign-in sheet's forms. repeat asks for the password twice: there is no
+// other way to catch a typo in a new password. "sent" has no fields, only a
+// message and a way back.
 const LOGIN_MODES = {
-  signin: { title: 'Sign in', submit: 'Sign in', email: true, password: 'current-password' },
-  signup: { title: 'Create an account', submit: 'Create account', email: true, password: 'new-password', repeat: true },
-  forgot: { title: 'Reset your password', submit: 'Send reset link', email: true },
+  signin: { title: 'Sign in', submit: 'Sign in', email: true, password: 'current-password', links: true },
+  signup: { title: 'Create an account', submit: 'Create account', email: true, password: 'new-password', repeat: true, links: true },
+  forgot: { title: 'Reset your password', submit: 'Send reset link', email: true, links: true },
+  sent: { title: 'Check your email', submit: 'Back to sign in' },
   reset: { title: 'Choose a new password', submit: 'Save password', password: 'new-password', repeat: true },
 };
 
 function openLogin(mode, reason) {
-  if (reason != null) $('login-reason').textContent = reason;
-  setLoginMode(mode);
+  closeAccountMenu();
+  setLoginMode(mode, reason);
   $('sheet-login').hidden = false;
   // Start where typing is needed: the email, unless it's filled in and a password follows.
   const m = LOGIN_MODES[mode];
-  $(m.email && (!m.password || !$('login-email').value) ? 'login-email' : 'login-password').focus();
+  if (m.email || m.password) {
+    $(m.email && (!m.password || !$('login-email').value) ? 'login-email' : 'login-password').focus();
+  }
 }
 
-function setLoginMode(mode) {
+function closeLogin() {
+  state.afterLogin = null;
+  $('sheet-login').hidden = true;
+}
+
+function setLoginMode(mode, reason) {
   const m = LOGIN_MODES[mode];
   state.loginMode = mode;
+  if (reason !== undefined) $('login-reason').textContent = reason;
   $('login-title').textContent = m.title;
   $('btn-login').textContent = m.submit;
   $('login-email-wrap').hidden = !m.email;
@@ -985,15 +1018,23 @@ function setLoginMode(mode) {
   $('login-hint').hidden = !m.repeat;
   $('login-repeat-wrap').hidden = !m.repeat;
   $('login-repeat').required = !!m.repeat;
+  showPasswords(false);
+  $('login-links').hidden = !m.links;
   $('btn-login-forgot').hidden = mode !== 'signin';
   const signupOpen = !!(state.cfg && state.cfg.signup);
-  $('login-switch').hidden = mode === 'reset' || (mode !== 'forgot' && !signupOpen);
-  const back = mode === 'signup' || mode === 'forgot';
-  $('login-switch-text').textContent = mode === 'forgot' ? 'Remembered it?' : back ? 'Have an account?' : 'New here?';
-  $('btn-login-switch').textContent = back ? 'Sign in' : 'Create an account';
+  $('login-switch').hidden = mode === 'signin' && !signupOpen;
+  const toSignin = mode !== 'signin';
+  $('login-switch-text').textContent = mode === 'signup' ? 'Have an account?' : toSignin ? 'Remembered it?' : 'New here?';
+  $('btn-login-switch').textContent = toSignin ? 'Sign in' : 'Create an account';
   $('login-error').hidden = true;
   $('login-password').value = '';
   $('login-repeat').value = '';
+}
+
+function showPasswords(show) {
+  for (const id of ['login-password', 'login-repeat']) $(id).type = show ? 'text' : 'password';
+  $('btn-show-password').textContent = show ? 'Hide' : 'Show';
+  $('btn-show-password').setAttribute('aria-label', show ? 'Hide password' : 'Show password');
 }
 
 function loginError(msg) {
@@ -1004,6 +1045,7 @@ function loginError(msg) {
 async function submitLogin(e) {
   e.preventDefault();
   const mode = state.loginMode;
+  if (mode === 'sent') return setLoginMode('signin', '');
   if (LOGIN_MODES[mode].repeat && $('login-password').value !== $('login-repeat').value) {
     return loginError('The passwords don\u2019t match.');
   }
@@ -1014,24 +1056,26 @@ async function submitLogin(e) {
   try {
     if (mode === 'forgot') {
       await api('/api/password/forgot', { method: 'POST', body: JSON.stringify({ email }) });
-      state.afterLogin = null;
-      $('sheet-login').hidden = true;
-      showToast('If ' + email + ' has an account, a reset link is on its way');
+      setLoginMode('sent', 'If ' + email + ' has an account, a link to choose a new password ' +
+        'is on its way. It works once, for an hour. Check spam if it doesn\u2019t arrive.');
       return;
     }
-    const call = {
-      signin: ['/api/login', { email, password }],
-      signup: ['/api/signup', { email, password }],
-      reset: ['/api/password/reset', { token: state.resetToken, password }],
-    }[mode];
-    setUser(await api(call[0], { method: 'POST', body: JSON.stringify(call[1]) }));
-    $('sheet-login').hidden = true;
-    setLoginMode('signin');
-    if (mode === 'signup') showToast('Account created — welcome');
     if (mode === 'reset') {
+      // Every session ends with a reset, so the new password is used right away.
+      const u = await api('/api/password/reset', {
+        method: 'POST', body: JSON.stringify({ token: state.resetToken, password }),
+      });
       state.resetToken = null;
-      showToast('Password changed — you\u2019re signed in');
+      setUser(null);
+      $('login-email').value = u.email;
+      openLogin('signin', 'Password changed. Sign in with your new password.');
+      return;
     }
+    setUser(await api(mode === 'signup' ? '/api/signup' : '/api/login', {
+      method: 'POST', body: JSON.stringify({ email, password }),
+    }));
+    $('sheet-login').hidden = true;
+    if (mode === 'signup') showToast('Account created — welcome');
     await loadPlaces();
     const then = state.afterLogin;
     state.afterLogin = null;
@@ -1052,7 +1096,7 @@ function openResetFromLink() {
   state.resetToken = token;
   params.delete('reset');
   history.replaceState(null, '', location.pathname + (params.size ? '?' + params : ''));
-  openLogin('reset', 'Choose a new password for your account.');
+  openLogin('reset', '');
 }
 
 // signOut also ends a recording in progress and forgets a priced one, so whoever
@@ -1647,21 +1691,38 @@ $('btn-save').onclick = openSaveSheet;
 $('btn-save-cancel').onclick = () => { $('sheet-save').hidden = true; };
 $('btn-save-confirm').onclick = saveTrip;
 
-$('btn-history').onclick = () => openHistory();
+$('btn-account').onclick = (e) => {
+  e.stopPropagation();
+  toggleAccountMenu();
+};
+$('menu-history').onclick = () => {
+  closeAccountMenu();
+  openHistory();
+};
+$('menu-logout').onclick = () => {
+  closeAccountMenu();
+  signOut();
+};
+document.addEventListener('click', (e) => {
+  if (!$('account-menu').hidden && !$('account-menu').contains(e.target)) closeAccountMenu();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!$('sheet-login').hidden) closeLogin();
+  closeAccountMenu();
+});
+
 $('login-form').addEventListener('submit', submitLogin);
+$('btn-login-close').onclick = closeLogin;
+$('btn-show-password').onclick = () => showPasswords($('login-password').type === 'password');
 $('btn-login-switch').onclick = () => {
-  setLoginMode(state.loginMode === 'signin' ? 'signup' : 'signin');
+  setLoginMode(state.loginMode === 'signin' ? 'signup' : 'signin', '');
   $('login-email').focus();
 };
 $('btn-login-forgot').onclick = () => {
-  setLoginMode('forgot');
+  setLoginMode('forgot', 'Enter your email and we\u2019ll send a link to choose a new password.');
   $('login-email').focus();
 };
-$('btn-login-cancel').onclick = () => {
-  state.afterLogin = null;
-  $('sheet-login').hidden = true;
-};
-$('btn-logout').onclick = signOut;
 $('btn-history-back').onclick = () => {
   if (!$('trip-detail').hidden) {
     closeTripDetail();

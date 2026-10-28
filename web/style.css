@@ -52,6 +52,69 @@ html, body {
 }
 .icon-btn:active { background: var(--card-2); }
 
+/* account button and menu (top right) */
+.account-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.account-btn.signed-in { padding: 4px; border-radius: 50%; }
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: #061018;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.account-menu {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 56px);
+  right: 12px;
+  z-index: 18;
+  min-width: 220px;
+  max-width: calc(100% - 24px);
+  background: var(--card);
+  border: 1px solid var(--card-2);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+}
+.account-menu-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--card-2);
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.account-email {
+  color: var(--text);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-menu button {
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font-size: 15px;
+  padding: 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.account-menu button:hover, .account-menu button:focus-visible { background: var(--card-2); }
+
 .search-wrap { margin: 2px 0 8px; }
 .search-open-btn {
   width: 100%;
@@ -563,6 +626,12 @@ html, body {
   gap: 14px;
 }
 .sheet h2 { font-size: 17px; }
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
 .sheet label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
 .sheet-caption { display: block; white-space: nowrap; }
 .sheet input {
@@ -586,6 +655,17 @@ html, body {
   color: var(--text);
 }
 .sheet-actions .primary { flex: 1; width: auto; }
+.btn-block { width: 100%; padding: 12px 16px; font-size: 15px; }
+
+/* On wider screens a sheet is a centred card, not a strip across the bottom. */
+@media (min-width: 640px) {
+  .overlay { align-items: center; justify-content: center; }
+  .sheet {
+    max-width: 420px;
+    border-radius: var(--radius);
+    padding-bottom: 18px;
+  }
+}
 .danger { background: transparent !important; color: var(--red) !important; }
 .flex-spacer { flex: 1; }
 
@@ -606,16 +686,35 @@ html, body {
   padding: 10px 12px;
 }
 .panel header .brand { flex: 1; }
-.account { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 
 #sheet-login { z-index: 25; } /* above the history panel and the other sheets */
-.login-error { color: var(--red); font-size: 13px; }
+.login-sheet { gap: 12px; }
+.login-reason { font-size: 14px; line-height: 1.4; margin-top: -4px; }
+.login-reason:empty { display: none; }
+.password-field { position: relative; display: flex; }
+.password-field input { flex: 1; padding-right: 60px; }
+.password-field .link-btn {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.field-hint { font-size: 12px; }
+.login-error {
+  color: var(--red);
+  font-size: 13px;
+  background: rgba(228, 87, 79, .1);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
 .login-links {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   flex-wrap: wrap;
   gap: 6px 12px;
   font-size: 13px;
+  padding-top: 2px;
 }
 .link-btn {
   border: 0;

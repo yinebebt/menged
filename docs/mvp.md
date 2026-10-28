@@ -176,7 +176,7 @@ Small enough to list completely.
 | `POST` | `/api/signup` | `{email, password}` → creates the account, then as login (403 when `server.signup` is off) |
 | `POST` | `/api/login` | `{email, password}` → `{email}` and a session cookie |
 | `POST` | `/api/password/forgot` | `{email}` → 202 always; emails a reset link if the account exists |
-| `POST` | `/api/password/reset` | `{token, password}` → sets it, signs out other devices, then as login |
+| `POST` | `/api/password/reset` | `{token, password}` → `{email}`; sets it and ends every session, so you sign in again |
 | `POST` | `/api/logout` | ends the session |
 | `GET` | `/api/me` | 🔒 `{email}`, or 401 when signed out |
 | `GET` | `/api/trips` | 🔒 your trips, newest first |

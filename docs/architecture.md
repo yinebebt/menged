@@ -76,8 +76,8 @@ Trips and saved places belong to a user, so those endpoints need a session.
 - "Forgot password?" emails a single-use link valid for an hour (`/?reset=TOKEN`, built
   from `server.public_url`, never from the request's `Host`). The answer is the same
   whether or not the address has an account, and the email is sent after answering,
-  so neither tells who has signed up. Using the link sets the new password, signs the
-  user out everywhere, and signs this browser in. Reset tokens, like session tokens,
+  so neither tells who has signed up. Using the link sets the new password and signs the
+  user out everywhere; the app then asks them to sign in with it. Reset tokens, like session tokens,
   are stored only as SHA-256 hashes.
 - Email goes out through Mailtrap's API (`mail.provider: mailtrap`, optionally into a
   Mailtrap testing inbox with `sandbox_id`), or to the server log (`log`, the default)

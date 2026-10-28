@@ -431,7 +431,9 @@ type resetRequest struct {
 	Password string `json:"password"`
 }
 
-// resetPassword sets a new password from an emailed link and signs this browser in.
+// resetPassword sets a new password from an emailed link. Every session ends,
+// this browser's too, so the new password is used once right away; the answer
+// carries the email to fill in the sign-in form.
 func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	var req resetRequest
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -445,7 +447,7 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.startSession(w, r, u)
+	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
