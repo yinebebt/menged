@@ -38,6 +38,13 @@ type Trip struct {
 	RatePerWaitMin float64 `json:"rate_per_wait_min"`
 
 	Note string `json:"note,omitempty"`
+
+	// Set on recorded trips only. Distance, duration, waiting and suggested fare are
+	// then the measured values, and QuotedFare is the quote given before starting.
+	StartedAt  string   `json:"started_at,omitempty"`
+	EndedAt    string   `json:"ended_at,omitempty"`
+	Track      string   `json:"track,omitempty"` // polyline of the GPS fixes that counted
+	QuotedFare *float64 `json:"quoted_fare,omitempty"`
 }
 
 // Place is a named landmark for one-tap pin setting.
@@ -85,16 +92,19 @@ func now() string { return time.Now().Format(time.RFC3339) }
 const tripCols = `id, created_at, pickup_label, pickup_lat, pickup_lng,
 	dest_label, dest_lat, dest_lng, stop_label, stop_lat, stop_lng, waiting_min,
 	distance_km, duration_min, route_geometry, suggested_fare, actual_charged, multiplier,
-	rate_base, rate_per_km, rate_per_min, rate_per_wait_min, note`
+	rate_base, rate_per_km, rate_per_min, rate_per_wait_min, note,
+	started_at, ended_at, track, quoted_fare`
 
 func scanTrip(row interface{ Scan(...any) error }) (Trip, error) {
 	var t Trip
 	var pickupLabel, destLabel, stopLabel, geometry, note sql.NullString
-	var charged, stopLat, stopLng sql.NullFloat64
+	var startedAt, endedAt, track sql.NullString
+	var charged, stopLat, stopLng, quoted sql.NullFloat64
 	err := row.Scan(&t.ID, &t.CreatedAt, &pickupLabel, &t.PickupLat, &t.PickupLng,
 		&destLabel, &t.DestLat, &t.DestLng, &stopLabel, &stopLat, &stopLng, &t.WaitingMin,
 		&t.DistanceKM, &t.DurationMin, &geometry, &t.SuggestedFare, &charged, &t.Multiplier,
-		&t.RateBase, &t.RatePerKM, &t.RatePerMin, &t.RatePerWaitMin, &note)
+		&t.RateBase, &t.RatePerKM, &t.RatePerMin, &t.RatePerWaitMin, &note,
+		&startedAt, &endedAt, &track, &quoted)
 	if err != nil {
 		return t, err
 	}
@@ -106,6 +116,10 @@ func scanTrip(row interface{ Scan(...any) error }) (Trip, error) {
 	}
 	t.RouteGeometry = geometry.String
 	t.Note = note.String
+	t.StartedAt, t.EndedAt, t.Track = startedAt.String, endedAt.String, track.String
+	if quoted.Valid {
+		t.QuotedFare = &quoted.Float64
+	}
 	if charged.Valid {
 		t.ActualCharged = &charged.Float64
 	}
@@ -137,17 +151,26 @@ func (s *Store) InsertTrip(t *Trip) error {
 	res, err := s.db.Exec(`INSERT INTO trips (created_at, pickup_label, pickup_lat, pickup_lng,
 		dest_label, dest_lat, dest_lng, stop_label, stop_lat, stop_lng, waiting_min,
 		distance_km, duration_min, route_geometry, suggested_fare, actual_charged, multiplier,
-		rate_base, rate_per_km, rate_per_min, rate_per_wait_min, note)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rate_base, rate_per_km, rate_per_min, rate_per_wait_min, note,
+		started_at, ended_at, track, quoted_fare)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.CreatedAt, t.PickupLabel, t.PickupLat, t.PickupLng,
 		t.DestLabel, t.DestLat, t.DestLng, t.StopLabel, t.StopLat, t.StopLng, t.WaitingMin,
 		t.DistanceKM, t.DurationMin, t.RouteGeometry, t.SuggestedFare, t.ActualCharged, t.Multiplier,
-		t.RateBase, t.RatePerKM, t.RatePerMin, t.RatePerWaitMin, t.Note)
+		t.RateBase, t.RatePerKM, t.RatePerMin, t.RatePerWaitMin, t.Note,
+		nullIfEmpty(t.StartedAt), nullIfEmpty(t.EndedAt), nullIfEmpty(t.Track), t.QuotedFare)
 	if err != nil {
 		return err
 	}
 	t.ID, err = res.LastInsertId()
 	return err
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // UpdateTrip sets actual_charged and/or note. Returns false if id is missing.

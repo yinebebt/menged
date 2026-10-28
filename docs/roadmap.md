@@ -78,7 +78,16 @@ per hour-of-day, per corridor. Half a dozen buckets would beat any free traffic 
 
 Requires adding an actual-duration field — cheap, and best done as part of 2.3.
 
-### 2.3 Record the trip actually driven
+### 2.3 Record the trip actually driven — **shipped, without map matching**
+
+Shipped: "Start trip" records browser GPS while menged is on screen (wake lock on, track
+kept in localStorage), a live meter, and "End trip" pricing on the server (`/api/measure`).
+Jitter is handled by only counting moves larger than the fix's accuracy. Distance is the
+road route through points sampled ~300 m apart along the track (up to 25), so curves are
+counted without a `match` service; if routing fails it falls back to the GPS distance.
+Known limits: no background recording (a web page can't), and a sample that lands on the
+wrong carriageway can add a small detour — a simulated 14 km drive came out 3% long.
+Snap-to-road via OSRM `match` is still the fix if real trips show more than that.
 
 **Trigger:** you want to bill for the route taken rather than the route quoted, or
 disputes about distance start happening.
@@ -91,11 +100,10 @@ Note the trap the old ride-hailing backend fell into: it summed great-circle dis
 between raw GPS samples, which both undercounts (it ignores road curvature) and
 overcounts (GPS jitter at standstill adds phantom metres). Snap-to-road, or don't bother.
 
-### 2.4 Waiting time and stops — **typed-in waiting and one stop shipped**
+### 2.4 Waiting time and stops — **shipped**
 
-Shipped: a waiting-minutes field priced by `price_per_waiting_minute` (snapshotted on each
+Shipped: on recorded trips, waiting is measured (below). For quotes, a waiting-minutes field priced by `price_per_waiting_minute` (snapshotted on each
 trip as `rate_per_wait_min`), and one optional stop sent to the router as a waypoint.
-Still open: measuring waiting from GPS (below), which needs 2.3.
 
 **Trigger:** you've had enough trips where you waited, or made an intermediate stop, that
 the quoted fare was visibly wrong.

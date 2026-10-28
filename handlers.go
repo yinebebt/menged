@@ -34,6 +34,7 @@ func (s *Server) routes(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/config", s.config)
 	mux.HandleFunc("POST /api/estimate", s.estimate)
+	mux.HandleFunc("POST /api/measure", s.measure)
 	mux.HandleFunc("GET /api/geocode", s.geocode)
 	mux.HandleFunc("GET /api/reverse", s.reverse)
 
@@ -214,6 +215,82 @@ func (s *Server) estimate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type measureRequest struct {
+	Track      []TrackPoint `json:"track"`
+	Multiplier float64      `json:"multiplier"`
+	// Route asks the router for the road distance through the track. The live meter
+	// leaves it off so it does not spend routing quota every few seconds.
+	Route bool `json:"route"`
+}
+
+type measureResponse struct {
+	DistanceKM  float64   `json:"distance_km"`
+	DurationMin float64   `json:"duration_min"` // moving time
+	WaitingMin  float64   `json:"waiting_min"`
+	Rough       bool      `json:"rough"`  // only low-accuracy fixes were available
+	Method      string    `json:"method"` // "road" (routed through the track) or "gps"
+	Geometry    string    `json:"geometry"`
+	Track       string    `json:"track"` // the fixes that counted, as a polyline
+	Start       Point     `json:"start"`
+	End         Point     `json:"end"`
+	Fare        float64   `json:"fare"`
+	Breakdown   Breakdown `json:"breakdown"`
+	Rates       Rates     `json:"rates"`
+}
+
+// measure prices a recorded trip from its GPS track.
+func (s *Server) measure(w http.ResponseWriter, r *http.Request) {
+	var req measureRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	if len(req.Track) > maxTrackPoints {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("track has more than %d points", maxTrackPoints))
+		return
+	}
+	if req.Multiplier <= 0 {
+		req.Multiplier = 1
+	}
+	m := measureTrack(req.Track)
+	if len(m.Path) == 0 {
+		msg := "no GPS fixes recorded yet"
+		if len(req.Track) > 0 {
+			msg = fmt.Sprintf("all %d GPS fixes are outside the service area", len(req.Track))
+		}
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return
+	}
+
+	track := encodePolyline(m.Path)
+	resp := measureResponse{
+		DistanceKM:  m.GPSDistanceKM,
+		DurationMin: m.MovingMin,
+		WaitingMin:  m.WaitingMin,
+		Rough:       m.Rough,
+		Method:      "gps",
+		Geometry:    track,
+		Track:       track,
+		Start:       m.Path[0],
+		End:         m.Path[len(m.Path)-1],
+	}
+	if samples := routeSamples(m.Path); req.Route && len(samples) >= 2 {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		route, err := s.router.Route(ctx, samples)
+		if err == nil {
+			resp.DistanceKM, resp.Geometry, resp.Method = route.DistanceKM, route.Geometry, "road"
+		} else {
+			slog.Warn("routing a recorded track failed; using GPS distance", "err", err, "points", len(samples))
+		}
+	}
+
+	resp.Rates = s.cfg.Rates()
+	resp.Breakdown = CalculateFare(resp.DistanceKM, resp.DurationMin, resp.WaitingMin, req.Multiplier, resp.Rates)
+	resp.Fare = resp.Breakdown.Fare
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) listTrips(w http.ResponseWriter, r *http.Request) {
 	trips, err := s.store.ListTrips()
 	if err != nil {
@@ -229,9 +306,14 @@ func (s *Server) saveTrip(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
 	}
-	if t.DistanceKM <= 0 || t.DurationMin < 0 || t.SuggestedFare <= 0 {
+	// A recorded trip can measure 0 km (it never moved); a quote cannot.
+	recorded := t.StartedAt != ""
+	if (!recorded && t.DistanceKM <= 0) || t.DistanceKM < 0 || t.DurationMin < 0 || t.SuggestedFare <= 0 {
 		writeError(w, http.StatusBadRequest, "trip has no estimate")
 		return
+	}
+	if !recorded {
+		t.EndedAt, t.Track, t.QuotedFare = "", "", nil
 	}
 	if (t.StopLat == nil) != (t.StopLng == nil) {
 		writeError(w, http.StatusBadRequest, "stop needs both stop_lat and stop_lng")

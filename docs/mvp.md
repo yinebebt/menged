@@ -170,6 +170,7 @@ Small enough to list completely.
 | `GET` | `/api/health` | liveness probe (`{"status":"ok"}`), open even when auth is on |
 | `GET` | `/api/config` | fare rates, map style/camera, `geocode` flag |
 | `POST` | `/api/estimate` | `{pickup:{lat,lng}, stop?:{lat,lng}, dest:{lat,lng}, waiting_min?, multiplier?}` → `{distance_km, duration_min, geometry, fare, breakdown}` |
+| `POST` | `/api/measure` | `{track:[{lat,lng,t,acc}], multiplier?, route?}` → measured `{distance_km, duration_min, waiting_min, rough, method, geometry, track, start, end, fare, breakdown}` |
 | `GET` | `/api/geocode` | `?q=&lat=&lng=` → place hits (when geocoding configured) |
 | `GET` | `/api/reverse` | `?lat=&lng=` → `{label}` for a pin |
 | `GET` | `/api/trips` | list, newest first |
@@ -191,8 +192,7 @@ No in-app auth: bind to `127.0.0.1` locally; on a VPS use reverse-proxy Basic Au
 
 ## 7. Explicitly not in v1
 
-- Live GPS tracking of the trip, or recording the route actually driven
-- More than one stop, or waiting measured from GPS (typed-in waiting and one stop are in)
+- More than one planned stop (unplanned stops are captured by trip recording)
 - Accounts, login, or more than one driver
 - Passenger-facing anything; payments, receipts, SMS
 - Automatic surge / time-of-day pricing (multiplier stays manual)

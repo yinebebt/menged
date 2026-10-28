@@ -40,7 +40,7 @@
       <button type="button" id="btn-open-search" class="search-open-btn">Search place…</button>
     </div>
 
-    <div class="points">
+    <div class="points" id="points">
       <div class="point-row" id="row-pickup">
         <span class="dot pickup"></span>
         <span class="point-label" id="label-pickup">Tap the map to set pickup</span>
@@ -59,8 +59,9 @@
         <button class="mini-btn" id="btn-star-dest" title="Save as place" hidden>☆</button>
         <button class="mini-btn" id="btn-clear-dest" title="Clear" hidden>✕</button>
       </div>
-      <div class="point-extras" id="point-extras" hidden>
-        <button type="button" class="mini-btn" id="btn-add-stop">+ Stop</button>
+      <div class="point-extras" id="point-extras">
+        <button type="button" class="mini-btn btn-start" id="btn-start-trip" title="Record the trip with GPS and price what was actually driven">▶ Start trip</button>
+        <button type="button" class="mini-btn" id="btn-add-stop" hidden>+ Stop</button>
         <label class="waiting" id="waiting-wrap" hidden>
           Waiting
           <input id="waiting-min" type="number" inputmode="numeric" min="0" max="600" step="1" value="0">
@@ -91,13 +92,37 @@
             <button type="button" data-m="1.5">×1.5</button>
           </div>
           <div class="fare-block">
-            <span class="fare-label">Suggested</span>
+            <span class="fare-label" id="stat-fare-label">Suggested</span>
             <span class="fare" id="stat-fare">–</span>
+            <span class="fare-quoted" id="stat-quoted" hidden></span>
           </div>
           <button type="button" id="btn-share" class="btn-share" title="Share this quote">Share</button>
           <button id="btn-save" class="primary btn-save">Save</button>
         </div>
       </div>
+    </div>
+
+    <div id="meter" class="meter" hidden>
+      <div class="meter-head">
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span>Recording</span>
+        <span class="meter-elapsed" id="meter-elapsed">0:00</span>
+      </div>
+      <div class="meter-row">
+        <div class="stats">
+          <span id="meter-km">0.0 km</span> · <span id="meter-wait">0 min waiting</span>
+        </div>
+        <div class="fare-block">
+          <span class="fare-label">Meter</span>
+          <span class="fare" id="meter-fare">–</span>
+        </div>
+      </div>
+      <div class="meter-actions">
+        <button type="button" id="btn-navigate" class="btn-share" hidden>Navigate</button>
+        <button type="button" id="btn-cancel-trip" class="btn-share">Discard</button>
+        <button type="button" id="btn-end-trip" class="primary btn-save">End trip</button>
+      </div>
+      <div class="meter-note muted" id="meter-note">Keep menged on screen — recording pauses when it isn't.</div>
     </div>
   </div>
 </div>
@@ -141,6 +166,8 @@
       <div><dt>Suggested</dt><dd id="detail-suggested"></dd></div>
       <div><dt>Charged</dt><dd id="detail-charged"></dd></div>
       <div id="detail-wait-row" hidden><dt>Waiting</dt><dd id="detail-wait"></dd></div>
+      <div id="detail-recorded-row" hidden><dt>Recorded</dt><dd id="detail-recorded"></dd></div>
+      <div id="detail-quoted-row" hidden><dt>Quoted</dt><dd id="detail-quoted"></dd></div>
       <div><dt>Multiplier</dt><dd id="detail-mult"></dd></div>
       <div><dt>Rate card</dt><dd id="detail-rates"></dd></div>
     </dl>

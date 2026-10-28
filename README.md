@@ -6,6 +6,9 @@ A personal trip calculator for driving passengers around Addis Ababa. Set pickup
 destination; get driving distance, duration, route, and a suggested fare from your rate
 card. Optionally save the trip and what you actually charged.
 
+Or record the trip as you drive: menged prices the distance, moving time, and waiting
+time actually driven, and keeps the quote alongside.
+
 Not a ride-hailing platform.
 
 ```

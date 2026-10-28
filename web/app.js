@@ -20,6 +20,9 @@ const state = {
   cardCollapsed: false,
   saving: false,
   savedKey: null,     // estimate fingerprint after a successful save
+  rec: null,          // trip being recorded: {startedAt, points, quotedFare, multiplier, …}
+  measured: null,     // last recorded trip once priced: {startedAt, endedAt, points, track, quotedFare}
+  followUntil: 0,     // don't recentre on the driver until then (they panned the map)
   revSeq: { pickup: 0, stop: 0, dest: 0 },
 };
 
@@ -52,7 +55,6 @@ let map;
 async function init() {
   state.cfg = await api('/api/config');
   $('save-currency').textContent = state.cfg.rates.currency;
-  $('waiting-wrap').hidden = !(state.cfg.rates.price_per_waiting_minute > 0);
 
   const c = state.cfg.map_center;
   map = new maplibregl.Map({
@@ -97,10 +99,22 @@ async function init() {
       source: 'accuracy',
       paint: { 'line-color': '#4da3ff', 'line-width': 1.5, 'line-opacity': 0.7 },
     });
+    map.addSource('track', { type: 'geojson', data: emptyLine() });
+    map.addLayer({
+      id: 'track',
+      type: 'line',
+      source: 'track',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#f0a030', 'line-width': 4, 'line-opacity': 0.9 },
+    });
     if (pendingGeometry) drawRoute(pendingGeometry);
+    if (state.rec) drawTrack();
   });
 
+  map.on('dragstart', () => { state.followUntil = Date.now() + 15000; });
+
   map.on('click', (e) => {
+    if (state.rec) return;
     closePlaceSearch();
     setPoint(nextPin(), { lat: e.lngLat.lat, lng: e.lngLat.lng });
   });
@@ -115,6 +129,7 @@ async function init() {
   requestAnimationFrame(updateCardOffset);
 
   await loadPlaces();
+  resumeRecording();
 }
 
 function mapPadding() {
@@ -225,6 +240,7 @@ function nextPin() {
 
 function setPoint(kind, pt, opts) {
   opts = opts || {};
+  state.measured = null; // moving a pin turns a priced recording back into a quote
   state[kind] = {
     lat: pt.lat,
     lng: pt.lng,
@@ -318,6 +334,7 @@ function clearPoint(kind) {
   state.revSeq[kind] = (state.revSeq[kind] || 0) + 1;
   state[kind] = null;
   state.estimate = null;
+  state.measured = null;
   if (state.markers[kind]) {
     state.markers[kind].remove();
     state.markers[kind] = null;
@@ -418,6 +435,14 @@ function openTripDetail(t) {
   $('detail-charged').textContent = t.actual_charged != null ? cur + ' ' + t.actual_charged : '—';
   $('detail-wait-row').hidden = !(t.waiting_min > 0);
   $('detail-wait').textContent = Math.round(t.waiting_min) + ' min';
+  const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  $('detail-recorded-row').hidden = !t.started_at;
+  if (t.started_at) {
+    const mins = Math.round((new Date(t.ended_at) - new Date(t.started_at)) / 60000);
+    $('detail-recorded').textContent = time(t.started_at) + '–' + time(t.ended_at) + ' (' + mins + ' min)';
+  }
+  $('detail-quoted-row').hidden = t.quoted_fare == null;
+  $('detail-quoted').textContent = t.quoted_fare != null ? cur + ' ' + t.quoted_fare : '';
   $('detail-mult').textContent = '×' + (t.multiplier > 0 ? t.multiplier : 1);
   $('detail-rates').textContent =
     cur + ' ' + t.rate_base + ' + ' + t.rate_per_km + '/km + ' + t.rate_per_min + '/min' +
@@ -518,21 +543,24 @@ function renderPoints() {
     $('btn-star-' + kind).hidden = !pt || alreadySaved;
     $('row-' + kind).classList.toggle('active', state.active === kind && state.pickup && state.dest);
   }
+  const both = !!(state.pickup && state.dest);
   $('row-stop').hidden = !state.stopOn;
-  $('point-extras').hidden = !(state.pickup && state.dest);
-  $('btn-add-stop').hidden = state.stopOn;
+  $('btn-add-stop').hidden = !both || state.stopOn || !!state.measured;
+  $('waiting-wrap').hidden =
+    !both || !!state.measured || !(state.cfg && state.cfg.rates.price_per_waiting_minute > 0);
 }
 
 let estimateTimer = null;
 let estimateSeq = 0;
 
 function requestEstimate() {
-  if (!state.pickup || !state.dest) return;
+  if (state.rec || !state.pickup || !state.dest) return;
   clearTimeout(estimateTimer);
   estimateTimer = setTimeout(runEstimate, 250);
 }
 
 async function runEstimate() {
+  if (state.measured) return runMeasure();
   const seq = ++estimateSeq;
   showResult('spinner');
   try {
@@ -577,9 +605,15 @@ function renderResult() {
     updatePeek();
     return;
   }
+  const m = state.measured;
+  const cur = state.cfg.rates.currency;
   $('stat-km').textContent = est.distance_km.toFixed(1) + ' km';
-  $('stat-min').textContent = Math.round(est.duration_min) + ' min';
-  $('stat-fare').textContent = state.cfg.rates.currency + ' ' + est.fare;
+  $('stat-min').textContent = Math.round(est.duration_min) + ' min' +
+    (m && est.waiting_min >= 0.5 ? ' + ' + Math.round(est.waiting_min) + ' wait' : '');
+  $('stat-fare').textContent = cur + ' ' + est.fare;
+  $('stat-fare-label').textContent = m ? 'Metered' : 'Suggested';
+  $('stat-quoted').hidden = !(m && m.quotedFare != null);
+  $('stat-quoted').textContent = m && m.quotedFare != null ? 'quoted ' + cur + ' ' + m.quotedFare : '';
   for (const b of $('multipliers').children) {
     b.classList.toggle('on', Number(b.dataset.m) === state.multiplier);
   }
@@ -732,6 +766,7 @@ async function saveTrip() {
   }
 
   const charged = parseFloat($('save-amount').value);
+  const m = state.measured;
   const trip = {
     pickup_label: state.pickup.label || '',
     pickup_lat: state.pickup.lat,
@@ -742,7 +777,11 @@ async function saveTrip() {
     stop_label: state.stop ? state.stop.label || '' : '',
     stop_lat: state.stop ? state.stop.lat : undefined,
     stop_lng: state.stop ? state.stop.lng : undefined,
-    waiting_min: state.waitingMin,
+    waiting_min: m ? est.waiting_min : state.waitingMin,
+    started_at: m ? m.startedAt : undefined,
+    ended_at: m ? m.endedAt : undefined,
+    track: m ? m.track : undefined,
+    quoted_fare: m && m.quotedFare != null ? m.quotedFare : undefined,
     distance_km: est.distance_km,
     duration_min: est.duration_min,
     route_geometry: est.geometry,
@@ -869,6 +908,270 @@ function deleteTrip() {
     .catch((err) => alert(err.message));
 }
 
+// ---- trip recording ----
+// The browser collects GPS fixes while menged is on screen; the server turns them
+// into distance, moving time, waiting time and a fare (/api/measure). The trip is
+// kept in localStorage as it goes, so a reload or a crash doesn't lose it.
+
+const TRIP_KEY = 'menged_trip';
+const MIN_FIX_GAP_MS = 2000;    // keep at most one fix per 2 s
+const LIVE_METER_MS = 30000;    // re-price the live meter this often (no routing call)
+
+function storeTrip() {
+  const r = state.rec;
+  try {
+    localStorage.setItem(TRIP_KEY, JSON.stringify({
+      startedAt: r.startedAt, points: r.points, quotedFare: r.quotedFare, multiplier: r.multiplier,
+    }));
+  } catch (_) { /* storage full or blocked: keep recording in memory */ }
+}
+
+function forgetStoredTrip() {
+  try { localStorage.removeItem(TRIP_KEY); } catch (_) {}
+}
+
+function startTrip() {
+  if (state.rec) return;
+  if (!navigator.geolocation) {
+    showToast('No GPS on this device');
+    return;
+  }
+  closePlaceSearch();
+  state.rec = {
+    startedAt: new Date().toISOString(),
+    points: [],
+    quotedFare: state.estimate && !state.measured ? state.estimate.fare : null,
+    multiplier: state.multiplier,
+  };
+  storeTrip();
+  beginRecording();
+}
+
+// resumeRecording picks up a trip that was recording when the page was closed.
+function resumeRecording() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(TRIP_KEY) || 'null'); } catch (_) {}
+  if (!saved || !saved.startedAt || !Array.isArray(saved.points)) return;
+  state.rec = saved;
+  state.multiplier = saved.multiplier || 1;
+  beginRecording();
+  liveMeasure();
+  showToast('Recording resumed');
+}
+
+function beginRecording() {
+  const r = state.rec;
+  setRecordingUI(true);
+  r.watchId = navigator.geolocation.watchPosition(onFix, onFixError, {
+    enableHighAccuracy: true, maximumAge: 0, timeout: 20000,
+  });
+  r.timer = setInterval(tickMeter, 1000);
+  acquireWakeLock();
+  drawTrack();
+  tickMeter();
+}
+
+function stopRecording() {
+  const r = state.rec;
+  if (!r) return;
+  if (r.watchId != null) navigator.geolocation.clearWatch(r.watchId);
+  clearInterval(r.timer);
+  if (r.wakeLock) r.wakeLock.release().catch(() => {});
+  r.watchId = null;
+  r.wakeLock = null;
+}
+
+async function acquireWakeLock() {
+  const r = state.rec;
+  if (!r || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+  try {
+    r.wakeLock = await navigator.wakeLock.request('screen');
+  } catch (_) { /* battery saver or unsupported; recording still works while on screen */ }
+}
+
+// The OS drops the wake lock whenever the page is hidden; take it again on return.
+document.addEventListener('visibilitychange', () => {
+  if (state.rec && document.visibilityState === 'visible') {
+    acquireWakeLock();
+    showToast('Recording');
+  }
+});
+
+function onFix(pos) {
+  const r = state.rec;
+  if (!r) return;
+  const p = {
+    lat: pos.coords.latitude,
+    lng: pos.coords.longitude,
+    t: pos.timestamp || Date.now(),
+    acc: Math.round(pos.coords.accuracy || 0),
+  };
+  const last = r.points[r.points.length - 1];
+  if (last && p.t - last.t < MIN_FIX_GAP_MS) return;
+  r.points.push(p);
+  storeTrip();
+  $('meter-note').textContent = p.acc > 50
+    ? 'GPS is rough (±' + p.acc + ' m) — short moves won’t count until it improves.'
+    : 'Keep menged on screen — recording pauses when it isn’t.';
+  drawTrack();
+  if (Date.now() > state.followUntil) map.easeTo({ center: [p.lng, p.lat], duration: 600 });
+  if (r.points.length === 2 || !r.lastMeasureAt || Date.now() - r.lastMeasureAt > LIVE_METER_MS) {
+    liveMeasure();
+  }
+}
+
+function onFixError(err) {
+  if (err && err.code === 1) {
+    stopRecording();
+    state.rec = null;
+    forgetStoredTrip();
+    setRecordingUI(false);
+    showToast('Location permission denied — recording stopped');
+    return;
+  }
+  $('meter-note').textContent = 'Waiting for GPS…';
+}
+
+async function liveMeasure() {
+  const r = state.rec;
+  if (!r || !r.points.length) return;
+  r.lastMeasureAt = Date.now();
+  try {
+    r.live = await api('/api/measure', {
+      method: 'POST',
+      body: JSON.stringify({ track: r.points, multiplier: r.multiplier, route: false }),
+    });
+    tickMeter();
+  } catch (_) { /* keep the last reading; the final price is computed at the end */ }
+}
+
+function tickMeter() {
+  const r = state.rec;
+  if (!r) return;
+  const sec = Math.max(0, Math.floor((Date.now() - new Date(r.startedAt)) / 1000));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  $('meter-elapsed').textContent = (h ? h + ':' + pad(m) : m) + ':' + pad(s);
+  const live = r.live;
+  $('meter-km').textContent = (live ? live.distance_km : 0).toFixed(1) + ' km';
+  $('meter-wait').textContent = Math.round(live ? live.waiting_min : 0) + ' min waiting';
+  $('meter-fare').textContent = live ? state.cfg.rates.currency + ' ' + live.fare : '–';
+}
+
+function drawTrack() {
+  const src = map && map.getSource('track');
+  if (!src) return;
+  const pts = state.rec ? state.rec.points : [];
+  src.setData({
+    type: 'Feature',
+    geometry: { type: 'LineString', coordinates: pts.map((p) => [p.lng, p.lat]) },
+  });
+}
+
+function setRecordingUI(on) {
+  $('points').hidden = on;
+  $('search-wrap').hidden = on || !(state.cfg && state.cfg.geocode);
+  $('meter').hidden = !on;
+  $('btn-navigate').hidden = !(on && state.dest);
+  $('btn-end-trip').disabled = false;
+  if (on) {
+    $('result').hidden = true;
+    setCardCollapsed(false);
+  } else {
+    drawTrack();
+    renderResult();
+  }
+  requestAnimationFrame(updateCardOffset);
+}
+
+async function endTrip() {
+  const r = state.rec;
+  if (!r) return;
+  if (!r.points.length) {
+    showToast('No GPS fix yet');
+    return;
+  }
+  stopRecording();
+  $('btn-end-trip').disabled = true;
+  $('meter-note').textContent = 'Pricing the trip…';
+  let m;
+  try {
+    m = await api('/api/measure', {
+      method: 'POST',
+      body: JSON.stringify({ track: r.points, multiplier: r.multiplier, route: true }),
+    });
+  } catch (err) {
+    // Nothing is lost: the fixes are still stored. Keep recording; End again or Discard.
+    beginRecording();
+    alert('Could not price the trip: ' + err.message +
+      '\nStill recording — tap End trip to try again, or Discard.');
+    return;
+  }
+
+  forgetStoredTrip();
+  state.rec = null;
+  setRecordingUI(false);
+  state.multiplier = r.multiplier;
+  const skip = { skipEstimate: true };
+  removeStop(skip);
+  // A recorded trip starts and ends where the GPS says, not where pins were planned.
+  setPoint('pickup', m.start, skip);
+  setPoint('dest', m.end, skip);
+  state.measured = {
+    startedAt: r.startedAt,
+    endedAt: new Date().toISOString(),
+    points: r.points,
+    track: m.track,
+    quotedFare: r.quotedFare,
+  };
+  showMeasured(m);
+  showToast(m.rough ? 'Trip priced from rough GPS — check the distance'
+    : m.method === 'road' ? 'Trip priced' : 'Trip priced from GPS (routing unavailable)');
+}
+
+function showMeasured(m) {
+  state.estimate = {
+    distance_km: m.distance_km,
+    duration_min: m.duration_min,
+    waiting_min: m.waiting_min,
+    geometry: m.geometry,
+    fare: m.fare,
+    breakdown: m.breakdown,
+  };
+  state.savedKey = null;
+  setCardCollapsed(false);
+  drawRoute(m.geometry);
+  renderPoints();
+  renderResult();
+}
+
+// runMeasure re-prices a finished recording, e.g. after a multiplier change. The
+// route through the track is cached server-side, so this costs no routing quota.
+async function runMeasure() {
+  const seq = ++estimateSeq;
+  showResult('spinner');
+  try {
+    const m = await api('/api/measure', {
+      method: 'POST',
+      body: JSON.stringify({ track: state.measured.points, multiplier: state.multiplier, route: true }),
+    });
+    if (seq !== estimateSeq || !state.measured) return;
+    showMeasured(m);
+  } catch (err) {
+    if (seq !== estimateSeq) return;
+    $('result-error-msg').textContent = err.message || 'Pricing failed.';
+    showResult('error');
+  }
+}
+
+function discardTrip() {
+  if (!state.rec || !confirm('Discard this recording?')) return;
+  stopRecording();
+  state.rec = null;
+  forgetStoredTrip();
+  setRecordingUI(false);
+}
+
 // quoteText is the one-line quote sent to a passenger, e.g.
 // "Bole → Ayat, 14.0 km, ~35 min, ETB 240". Unlabelled pins drop the place names.
 function quoteText() {
@@ -879,42 +1182,44 @@ function quoteText() {
   const parts = [];
   if (names.every(Boolean)) parts.push(names.join(' → '));
   parts.push(est.distance_km.toFixed(1) + ' km', '~' + Math.round(est.duration_min) + ' min');
-  if (state.waitingMin > 0) parts.push('+' + state.waitingMin + ' min waiting');
+  const wait = state.measured ? Math.round(est.waiting_min) : state.waitingMin;
+  if (wait > 0) parts.push('+' + wait + ' min waiting');
   parts.push(state.cfg.rates.currency + ' ' + est.fare);
   return parts.join(', ');
 }
 
-// routeLink opens the same pickup, stop and destination in Google Maps (Maps URLs,
-// no API key). Its route can differ slightly from ours; the quoted fare is ours.
-function routeLink() {
+// mapsLink is a Google Maps directions URL for the current pins (Maps URLs, no API
+// key). Shared quotes show the route from pickup; navigate starts turn-by-turn from
+// the device instead. Google's route can differ slightly from ours; the fare is ours.
+function mapsLink(navigate) {
   const ll = (p) => p.lat.toFixed(6) + ',' + p.lng.toFixed(6);
-  const q = new URLSearchParams({
-    api: '1',
-    origin: ll(state.pickup),
-    destination: ll(state.dest),
-    travelmode: 'driving',
-  });
+  const q = new URLSearchParams({ api: '1', destination: ll(state.dest), travelmode: 'driving' });
+  if (navigate) q.set('dir_action', 'navigate');
+  else q.set('origin', ll(state.pickup));
   if (state.stop) q.set('waypoints', ll(state.stop));
   return 'https://www.google.com/maps/dir/?' + q.toString();
 }
 
+// shareQuote always copies the quote, then opens the share sheet on phones. Desktop
+// browsers also expose navigator.share, but there it opens a menu instead of copying.
 async function shareQuote() {
   if (!state.estimate) return;
-  const text = quoteText() + '\n' + routeLink();
-  if (navigator.share) {
+  const text = quoteText() + '\n' + mapsLink(false);
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    copied = true;
+  } catch (_) { /* no clipboard access; the share sheet or prompt below still works */ }
+
+  const phone = window.matchMedia('(pointer: coarse)').matches;
+  if (phone && navigator.share) {
     try {
       await navigator.share({ text });
       return;
-    } catch (err) {
-      if (err && err.name === 'AbortError') return;
-    }
+    } catch (_) { /* dismissed or unsupported; fall through */ }
   }
-  try {
-    await navigator.clipboard.writeText(text);
-    showToast('Quote copied');
-  } catch (_) {
-    prompt('Copy this quote:', text);
-  }
+  if (copied) showToast('Quote copied');
+  else prompt('Copy this quote:', text);
 }
 
 $('card-handle').onclick = (e) => {
@@ -1158,6 +1463,15 @@ $('multipliers').onclick = (e) => {
 
 $('btn-retry').onclick = runEstimate;
 $('btn-share').onclick = shareQuote;
+$('btn-start-trip').onclick = (e) => { e.stopPropagation(); startTrip(); };
+$('btn-end-trip').onclick = endTrip;
+$('btn-cancel-trip').onclick = discardTrip;
+$('btn-navigate').onclick = () => {
+  if (!state.dest) return;
+  // menged gets no GPS while it's in the background, so the meter has a gap until return.
+  showToast('Recording pauses while menged is in the background');
+  window.open(mapsLink(true), '_blank', 'noopener');
+};
 $('btn-save').onclick = openSaveSheet;
 $('btn-save-cancel').onclick = () => { $('sheet-save').hidden = true; };
 $('btn-save-confirm').onclick = saveTrip;

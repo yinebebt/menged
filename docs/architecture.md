@@ -102,13 +102,15 @@ menged/
 │                                # route + reverse caches, typed geo errors
 ├── ors.go                       # HeiGIT ORS directions + Pelias geocoding
 ├── osrm.go                      # self-hosted OSRM directions
+├── track.go (+ track_test.go)   # recorded GPS track → distance, moving and waiting time
 ├── store.go / schema.sql        # SQLite trips + places
 ├── config.example.yaml
 ├── web/                         # //go:embed static UI
 └── docs/
 ```
 
-`fare.go` is the only pure unit under test by design. Deps: `modernc.org/sqlite`,
+Tests cover the pure units (`fare.go`, `track.go`), the store against a temp SQLite
+file, and the estimate/measure handlers with a stub router. Deps: `modernc.org/sqlite`,
 `gopkg.in/yaml.v3`.
 
 ---
@@ -124,6 +126,16 @@ menged/
 5. Client decodes the polyline onto MapLibre (waits for map load if needed).
 
 ORS snap failures unwrap to `ErrUnroutable` (HTTP 422); handlers do not string-match ORS JSON.
+
+**Recorded trips.** "Start trip" collects GPS fixes in the browser (one per ≥2 s, kept
+in `localStorage` so a reload resumes) while a screen wake lock is held. About every
+30 s the live meter posts the track to `POST /api/measure` with `route: false` (no
+routing call). "End trip" posts it with `route: true`: `measureTrack` in `track.go`
+drops fixes outside the service area or worse than 50 m (unless none are better),
+counts only moves larger than a fix's accuracy, and splits time into moving and
+waiting at 5 km/h; the router then returns the road distance through points sampled
+along the track. The server prices it with the same `CalculateFare`. A web page gets no
+GPS in the background, so recording needs menged on screen.
 
 ---
 

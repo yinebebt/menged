@@ -27,7 +27,13 @@ CREATE TABLE IF NOT EXISTS trips (
     rate_per_min    REAL    NOT NULL,
     rate_per_wait_min REAL  NOT NULL DEFAULT 0,
 
-    note            TEXT
+    note            TEXT,
+
+    -- recorded trips only: distance/duration/waiting/suggested_fare above are measured
+    started_at      TEXT,                      -- RFC3339
+    ended_at        TEXT,
+    track           TEXT,                      -- polyline of the GPS fixes that counted
+    quoted_fare     REAL                       -- the quote given before starting, if any
 );
 
 CREATE TABLE IF NOT EXISTS places (

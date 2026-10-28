@@ -86,3 +86,47 @@ func TestStoreTripStopAndWaiting(t *testing.T) {
 		t.Fatalf("plain trip: %#v", got)
 	}
 }
+
+func TestStoreRecordedTrip(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "t.db"), schemaSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	quoted := 240.0
+	rec := &Trip{
+		PickupLat: 9.01, PickupLng: 38.76, DestLat: 9.02, DestLng: 38.77,
+		DistanceKM: 0, DurationMin: 0, SuggestedFare: 250, Multiplier: 1,
+		RateBase: 50, RatePerKM: 15, RatePerMin: 1,
+		StartedAt: "2026-10-28T10:00:00+03:00", EndedAt: "2026-10-28T10:20:00+03:00",
+		Track: "_p~iF~ps|U", QuotedFare: &quoted,
+	}
+	quote := &Trip{
+		PickupLat: 9.01, PickupLng: 38.76, DestLat: 9.02, DestLng: 38.77,
+		DistanceKM: 3, DurationMin: 10, SuggestedFare: 250, Multiplier: 1,
+		RateBase: 50, RatePerKM: 15, RatePerMin: 1,
+	}
+	for _, tr := range []*Trip{rec, quote} {
+		if err := s.InsertTrip(tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := s.ListTrips()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range list {
+		switch got.ID {
+		case rec.ID:
+			if got.StartedAt != rec.StartedAt || got.EndedAt != rec.EndedAt || got.Track != rec.Track ||
+				got.QuotedFare == nil || *got.QuotedFare != 240 {
+				t.Fatalf("recorded trip: %#v", got)
+			}
+		case quote.ID:
+			if got.StartedAt != "" || got.Track != "" || got.QuotedFare != nil {
+				t.Fatalf("quote trip: %#v", got)
+			}
+		}
+	}
+}
