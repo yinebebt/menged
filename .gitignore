@@ -11,7 +11,7 @@ config.yaml
 *.db-wal
 /backups/
 
-# osm / osrm data (large, regenerated from geofabrik)
+# osm / osrm data
 /data/
 *.osm.pbf
 *.osrm*
@@ -20,6 +20,3 @@ config.yaml
 .DS_Store
 .idea/
 .vscode/
-
-# linux build for the VPS
-/menged-bin

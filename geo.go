@@ -17,7 +17,7 @@ type Point struct {
 	Lng float64 `json:"lng"`
 }
 
-// Route is a driving path between two points.
+// Route is a driving route through a list of points.
 type Route struct {
 	DistanceKM  float64 `json:"distance_km"`
 	DurationMin float64 `json:"duration_min"`
@@ -43,7 +43,7 @@ type Geocoder interface {
 }
 
 const (
-	minLat, maxLat = 3.0, 15.5 // Ethiopia-ish bbox
+	minLat, maxLat = 3.0, 15.5 // bounding box around Ethiopia
 	minLng, maxLng = 32.5, 48.5
 )
 
@@ -52,10 +52,12 @@ var (
 	ErrUnroutable  = errors.New("no road near that pin — move it closer to a street")
 )
 
+// InServiceArea reports whether p is inside the area menged prices trips for.
 func InServiceArea(p Point) bool {
 	return p.Lat >= minLat && p.Lat <= maxLat && p.Lng >= minLng && p.Lng <= maxLng
 }
 
+// NewRouter builds the configured routing provider, wrapped in a cache.
 func NewRouter(cfg *Config) (Router, error) {
 	var inner Router
 	var err error
@@ -73,6 +75,7 @@ func NewRouter(cfg *Config) (Router, error) {
 	return &cachedRouter{inner: inner, cache: map[string]cachedRoute{}}, nil
 }
 
+// NewGeocoder builds the configured geocoder, or returns nil when it is off.
 func NewGeocoder(cfg *Config) (Geocoder, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Geocoding.Provider))
 	if provider == "" {

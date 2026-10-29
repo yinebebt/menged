@@ -1,195 +1,132 @@
 # Architecture
 
-The guiding rule: **every component has to justify its own existence.** This document
-records what's in, what's out, and why.
+menged is a single Go process that serves a small web app and a JSON API, prices trips,
+and keeps each user's trips in SQLite. Routing and place search come from external
+providers behind two interfaces.
 
----
-
-## 1. The whole thing
-
-```
-  browser (MapLibre GL JS ← OpenFreeMap tiles)
-       │  JSON /api/*
-       ▼
-  menged (one Go binary)
-    handlers · fare · Router · Geocoder · SQLite
-       │                    │
-       ▼                    ▼
-  ORS (+ Pelias geo)     menged.db
+```mermaid
+flowchart TD
+    tiles["Map tiles<br/>(OpenFreeMap)"] --> browser["Browser<br/>web app + MapLibre GL JS"]
+    browser -- "JSON /api/*" --> menged["menged (one Go binary)<br/>handlers · fare · track · auth · store"]
+    menged --> providers["Router / Geocoder<br/>openrouteservice, Pelias, or OSRM"]
+    menged --> db[("menged.db<br/>SQLite")]
 ```
 
-One process, one config, one SQLite file.
+## Server
 
----
+The server exists for two reasons. The routing API key has to stay out of the browser,
+and trip history has to outlive browser storage. It is also the only place a fare is
+calculated: clients send points or a GPS track, never a price. That keeps one formula and
+one rate card in charge.
 
-## 2. Component decisions
+The HTTP layer is the standard library's `net/http` with method-and-path patterns
+(`POST /api/trips`). The static web app is embedded into the binary with `//go:embed`,
+so a deployment is one file plus its config.
 
-### Backend: a small Go binary — **yes**
+The code is one flat `package main`:
 
-Not for scale. For two specific reasons:
+| File | Responsibility |
+|------|----------------|
+| `main.go`, `config.go` | Flags, config loading with `${ENV}` expansion, startup and shutdown |
+| `handlers.go` | API routes, request validation, JSON responses |
+| `fare.go` | The fare formula, a pure function |
+| `track.go` | Turning a recorded GPS track into distance, moving time and waiting time |
+| `geo.go` | `Router` and `Geocoder` interfaces, service area, caching and retries |
+| `ors.go`, `osrm.go` | openrouteservice directions and Pelias geocoding; OSRM directions |
+| `auth.go` | Users, sessions, sign-in, password reset, the per-user guard |
+| `mail.go` | Sending reset emails through Mailtrap, or writing them to the log |
+| `store.go`, `schema.sql` | SQLite access and schema |
 
-1. **The routing API key must not sit in the browser.** A key in client-side JavaScript
-   is a key anyone can lift.
-2. **Trip history has to survive.** Browser storage gets cleared, and you'd lose your
-   records.
+The HTTP API is described in [openapi.yaml](openapi.yaml).
 
-A third reason emerges later: the fare must have exactly one owner. The old backend let
-clients submit their own distance and price and trusted them — that bug is avoided by
-construction if the server does the arithmetic.
-
-### Database: SQLite — **yes**, Postgres — **no**
-
-One user, one writer, a few thousand rows a year. SQLite is a file. No daemon, no
-container, no connection pool, no migration tooling. Backup is `cp menged.db elsewhere`.
-
-Use `modernc.org/sqlite` (pure Go, no cgo) so the binary cross-compiles cleanly and you
-can drop it on a phone-sized ARM box without a toolchain.
-
-### Web framework — **no**
-
-`net/http` with Go 1.22+ method-and-path routing (`mux.HandleFunc("POST /api/trips", …)`)
-covers the small API surface comfortably. Gin buys nothing here.
-
-### Frontend build step — **no**
-
-One `index.html`, one `app.js`, one `style.css`, MapLibre from a CDN or vendored. No npm,
-no bundler, no framework. Embed them with `//go:embed` so the binary is self-contained.
-
-`manifest.json` supports a home-screen bookmark look. No service worker until offline
-shell caching earns its keep ([roadmap.md](roadmap.md) §1.4).
-
-### Redis, MinIO, Casbin, JWT, WebSockets, worker pools — **no**
-
-There is no concurrency to manage, no roles to authorise (each user only sees their own rows), no file to store, and no
-real-time channel in the workflow. Every one of these was load-bearing in the old
-ride-sharing backend and none of them are load-bearing here.
-
-### Authentication — **in the app**, for personal data only
-
-Quotes are public: the estimate screen, sharing and the live meter need no account.
-Trips and saved places belong to a user, so those endpoints need a session.
-
-- Accounts are an email and a password. Anyone can create one from the sign-in sheet
-  (`POST /api/signup`, rate-limited like login) and is signed in straight away;
-  `server.signup: false` closes it. The email isn't confirmed at sign-up: a reset link
-  only works for whoever can read that inbox, so its owner can always take it back.
-- "Forgot password?" emails a single-use link valid for an hour (`/?reset=TOKEN`, built
-  from `server.public_url`, never from the request's `Host`). The answer is the same
-  whether or not the address has an account, and the email is sent after answering,
-  so neither tells who has signed up. Using the link sets the new password and signs the
-  user out everywhere; the app then asks them to sign in with it. Reset tokens, like session tokens,
-  are stored only as SHA-256 hashes.
-- Email goes out through Mailtrap's API (`mail.provider: mailtrap`, optionally into a
-  Mailtrap testing inbox with `sandbox_id`), or to the server log (`log`, the default)
-  during development. If email is broken, `menged -reset-password EMAIL` sets a password
-  from the server.
-- Passwords are bcrypt hashes. Sign-in sets an `HttpOnly`, `SameSite=Lax` cookie
-  (`Secure` behind TLS) holding a random token; only its SHA-256 is stored. Sessions
-  last 90 days and are extended when used, so a phone in daily use stays signed in.
-- Cross-site writes are refused by Go's `http.CrossOriginProtection` (`Sec-Fetch-Site`,
-  falling back to `Origin` vs `Host`). That also covers the sibling subdomains that
-  `SameSite` treats as the same site. Only the personal endpoints look up the session,
-  so static files and public quotes never touch the sessions table.
-- The web UI asks for sign-in at the moment it's needed (History, Save, a saved place,
-  Start trip) and then carries on. A 401 later, e.g. after a password reset, does the same.
-
-Basic Auth at the proxy was tried first and dropped: the browser owns its prompt, so the
-app can't ask at the right moment, can't sign out, and installed web apps re-prompt.
-
-### Routing behind an interface — **yes**, and this is the one abstraction worth having
+## Routing and geocoding
 
 ```go
 type Router interface {
-    Route(ctx context.Context, from, to Point) (Route, error)
+    Route(ctx context.Context, pts []Point) (Route, error) // pickup, stops, destination
 }
 
-type Route struct {
-    DistanceKM  float64
-    DurationMin float64
-    Geometry    string // encoded polyline
+type Geocoder interface {
+    Autocomplete(ctx context.Context, q string, near Point) ([]PlaceHit, error)
+    Reverse(ctx context.Context, p Point) (string, error)
 }
 ```
 
-Two implementations: `ors` (hosted, needs a key, 2 000 requests/day free) and `osrm`
-(self-hosted, unlimited). Starting with ORS means you're running today; switching to your
-own OSRM later is a config change and one new file, not a rewrite. See
+`routing.provider` selects openrouteservice (hosted, needs a key) or OSRM (self-hosted).
+Either one is wrapped in a short-lived in-memory cache keyed on rounded coordinates, with
+one retry on transient errors. A pin with no road nearby comes back as `ErrUnroutable`
+and reaches the client as a 422 with a readable message. Reverse labels are cached too,
+so nudging a pin doesn't spend quota. Providers and their limits are in
 [geospatial.md](geospatial.md).
 
----
+Points outside a bounding box around Ethiopia are rejected before any provider is
+called. The map's default camera and pan limits are around Addis Ababa and come from
+`/api/config`.
 
-## 3. Layout
+## Storage
 
-Flat, one `package main`. Packages can be extracted later if the tree grows.
+SQLite through `modernc.org/sqlite`, a pure-Go driver, so the binary cross-compiles
+without cgo. The database runs in WAL mode with foreign keys on, through a single
+connection. At this scale (a few writers, thousands of rows a year) that avoids
+locking errors without any tuning. Backup is a copy of the file.
 
-```
-menged/
-├── main.go / config.go / handlers.go
-├── fare.go (+ fare_test.go)     # pure fare arithmetic
-├── geo.go (+ geo_test.go)       # Router / Geocoder interfaces, service area,
-│                                # route + reverse caches, typed geo errors
-├── ors.go                       # HeiGIT ORS directions + Pelias geocoding
-├── osrm.go                      # self-hosted OSRM directions
-├── track.go (+ track_test.go)   # recorded GPS track → distance, moving and waiting time
-├── auth.go (+ auth_test.go)     # users, sessions, sign-in, password reset, per-user guard
-├── mail.go                      # Mailer: Mailtrap API, or the server log
-├── store.go / schema.sql        # SQLite users, sessions, trips, places
-├── config.example.yaml
-├── web/                         # //go:embed static UI
-└── docs/
-```
+[schema.sql](../schema.sql) is the reference for the tables: users, sessions,
+password resets, trips and places. It is applied with `CREATE TABLE IF NOT EXISTS` at
+startup. Two choices in it matter:
 
-Tests cover the pure units (`fare.go`, `track.go`), the store against a temp SQLite
-file, sign-in, password reset and per-user isolation over HTTP, and the estimate/measure handlers with
-a stub router. Deps: `modernc.org/sqlite`,
-`gopkg.in/yaml.v3`, `golang.org/x/crypto` (bcrypt), `golang.org/x/term` (password prompt),
-`github.com/mailtrap/mailtrap-go` (email).
+- Every trip stores the rates that priced it, next to the result. Raising your per-km
+  rate later doesn't change what old trips say.
+- `suggested_fare` sits next to `actual_charged`. After enough trips, the gap between
+  them shows whether the rate card matches what passengers pay.
 
----
+Until v1 there are no migrations: a schema change means starting a new database file.
 
-## 4. Estimate request flow
+## Web app
 
-1. Browser has both pins → `POST /api/estimate {pickup, stop?, dest, waiting_min?}`.
-2. Handler validates coordinates via `InServiceArea` (Ethiopia-ish bbox in `geo.go`).
-3. `router.Route(points)` (pickup, optional stop, destination) → distance, duration, encoded polyline. `NewRouter` wraps the
-   provider with an in-memory cache (~10 m–rounded keys, few minutes TTL) and one retry
-   only on transient errors (not ORS 4xx / unroutable pins).
-4. `CalculateFare(...)` → amount + breakdown.
-5. Client decodes the polyline onto MapLibre (waits for map load if needed).
+One `index.html`, `app.js` and `style.css`, with no framework or build step. MapLibre GL
+JS is loaded from a CDN, pinned to an exact version with a subresource-integrity hash.
+`manifest.json` lets the page be added to a phone's home screen. There is no service
+worker, so the app needs a connection.
 
-ORS snap failures unwrap to `ErrUnroutable` (HTTP 422); handlers do not string-match ORS JSON.
+Everything happens on one screen. A quote appears as soon as both pins are set. The trip
+log opens as a panel over the map.
 
-**Recorded trips.** "Start trip" collects GPS fixes in the browser (one per ≥2 s, kept
-in `localStorage` so a reload resumes) while a screen wake lock is held. About every
-30 s the live meter posts the track to `POST /api/measure` with `route: false` (no
-routing call). "End trip" posts it with `route: true`: `measureTrack` in `track.go`
-drops fixes outside the service area or worse than 50 m (unless none are better),
-counts only moves larger than a fix's accuracy, and splits time into moving and
-waiting at 5 km/h; the router then returns the road distance through points sampled
-along the track. The server prices it with the same `CalculateFare`. A web page gets no
-GPS in the background, so recording needs menged on screen.
+**Recorded trips.** "Start trip" collects GPS fixes (at most one every 2 s) while a
+screen wake lock is held. The fixes are kept in `localStorage`, so a reload resumes the
+trip. About every 30 s the live meter sends the track to `/api/measure` without routing;
+"End trip" sends it with routing on, and that result is what gets saved. A web page gets
+no GPS in the background, so menged has to stay on screen while recording. How the
+track is measured is described in [fares.md](fares.md).
 
----
+## Sign-in
 
-## 5. Exposing it beyond localhost
+Quotes, trip measurement and place search are public. Trips and saved places belong to a
+user, so those endpoints need a session.
 
-You will eventually want this on your phone while the binary lives on a small server.
-In rough order of preference:
+- **Accounts** are an email and a password (bcrypt). Anyone can sign up unless
+  `server.signup` is `false`. The email isn't confirmed at sign-up. A reset link only
+  works for whoever reads that inbox, so the owner of the address can always take the
+  account back.
+- **Sessions** are random tokens in an `HttpOnly`, `SameSite=Lax` cookie, `Secure` behind
+  TLS. Only a SHA-256 of the token is stored. A session lasts 90 days and is extended
+  when used, so a phone in daily use stays signed in.
+- **Password reset** emails a single-use link valid for an hour. The link is built from
+  `server.public_url`, never from the request's `Host` header. The forgot-password
+  answer is the same whether or not the account exists. Using the link ends every
+  session for that account. On the server, `menged -reset-password EMAIL` does the same
+  without email.
+- **Cross-site requests** that change state are refused by Go's
+  `http.CrossOriginProtection`. That also covers sibling subdomains, which `SameSite`
+  treats as the same site.
+- **Isolation**: every trip and place query is scoped to the session's user. Another
+  user's ID answers 404.
 
-1. **Tailscale** — private IP only, no public exposure. Best effort-to-safety ratio.
-2. **Reverse proxy with TLS (what the VPS runs)** — bind menged to `127.0.0.1:8080`
-   and put nginx or Caddy in front with HTTPS. Sign-in is in the app (§2), so the proxy
-   doesn't need `auth_basic`, but it should rate-limit `/api/login` (password guessing)
-   and the endpoints that spend routing quota: `/api/estimate`, `/api/measure`,
-   `/api/geocode`, `/api/reverse`.
+The web app asks for sign-in when it's needed (opening the trip log, saving, starting a
+trip) and then carries on with what you were doing.
 
-Session cookies are only `Secure` when the proxy sets `X-Forwarded-Proto: https`.
-Startup refuses a non-loopback listen unless you pass `-allow-public-listen` (which still logs a warning).
+## What isn't here
 
----
-
-## 6. Settled product choices
-
-- Polyline: Google-encoded precision-5 (what ORS returns); client decodes for the map.
-- Config: YAML with `${ENV}` expansion (`ORS_API_KEY`).
-- History: full-screen panel over the estimate UI; tap a row for detail, then show on
-  map / repeat / edit.
+There is no Redis, message queue, object storage, role system or WebSocket. Nothing in
+the workflow needs them: users only see their own rows, nothing runs in real time, and
+there are no files to store. Postgres would be the first addition, if several drivers
+ever wrote at the same time; see [roadmap.md](roadmap.md).
