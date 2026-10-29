@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -320,7 +319,7 @@ func (s *Server) saveTrip(w http.ResponseWriter, r *http.Request, u *User) {
 	}
 	// A recorded trip can measure 0 km (it never moved); a quote cannot.
 	recorded := t.StartedAt != ""
-	if (!recorded && t.DistanceKM <= 0) || t.DistanceKM < 0 || t.DurationMin < 0 || t.SuggestedFare <= 0 {
+	if (!recorded && t.DistanceKM <= 0) || t.DistanceKM < 0 || t.DurationMin < 0 {
 		writeError(w, http.StatusBadRequest, "trip has no estimate")
 		return
 	}
@@ -351,6 +350,7 @@ func (s *Server) saveTrip(w http.ResponseWriter, r *http.Request, u *User) {
 		t.Multiplier = 1
 	}
 	rates := s.cfg.Rates()
+	t.SuggestedFare = CalculateFare(t.DistanceKM, t.DurationMin, t.WaitingMin, t.Multiplier, rates).Fare
 	t.RateBase, t.RatePerKM, t.RatePerMin = rates.BaseFare, rates.PerKM, rates.PerMinute
 	t.RatePerWaitMin = rates.PerWaitMin
 	t.UserID = u.ID
@@ -480,7 +480,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 		return nil
 	}
 	var maxErr *http.MaxBytesError
-	if errors.As(err, &maxErr) || errors.Is(err, io.ErrUnexpectedEOF) {
+	if errors.As(err, &maxErr) {
 		return fmt.Errorf("body too large")
 	}
 	return err

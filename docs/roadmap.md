@@ -111,11 +111,10 @@ the quoted fare was visibly wrong.
 route request (every router supports them). Both are additive to the existing fare model —
 one more term in the same formula.
 
-If 2.3 records the trail, waiting can be measured instead of typed in. An earlier
-street-pickup meter did this: for each pair of GPS samples, if the speed between them is
-below a floor (a few km/h), count the elapsed time as waiting minutes; otherwise count the
-distance. Fare = km × per-km + waiting min × per-minute. Re-implement the idea. Do not copy
-that code.
+If 2.3 records the trail, waiting can be measured instead of typed in, the way a
+street-pickup taxi meter does it: for each pair of GPS samples, if the speed between them
+is below a floor (a few km/h), count the elapsed time as waiting minutes; otherwise count
+the distance. Fare = km × per-km + waiting min × per-minute.
 
 ---
 
@@ -168,10 +167,6 @@ Be honest that this is a different product, and that most of the v1 decisions we
 - user management (listing, removing drivers) that doesn't need a shell on the server
 - Postgres instead of SQLite, once there are enough drivers writing at once to matter
 - a hosted deployment with the operational responsibilities that follow
-
-At that point it's worth re-reading [background.md](background.md), because the earlier
-ride-hailing backend already solved authentication, RBAC and multi-user driver records —
-and that would finally be the right context in which to borrow from it.
 
 **What would still not follow:** matching, dispatch, a passenger app, or in-app payments.
 Several drivers each quoting their own trips is a shared tool. A marketplace is a company.

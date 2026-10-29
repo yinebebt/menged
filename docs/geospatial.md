@@ -4,9 +4,6 @@ External capabilities: **map display**, **driving route**, **place labels / sear
 
 Limits below were checked **August 2026**; re-verify before relying on free tiers.
 
-Some research carries over from an earlier ride-hailing backend
-([background.md](background.md)); conclusions here are for a single-user tool.
-
 ---
 
 ## 1. What we need

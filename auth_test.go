@@ -191,7 +191,7 @@ func TestAuthHTTP(t *testing.T) {
 	if rec := b.do("POST", "/api/places", `{"label":"Home","lat":9.02,"lng":38.77}`); rec.Code != http.StatusCreated {
 		t.Fatalf("same label for another user: %d %s", rec.Code, rec.Body)
 	}
-	if rec := a.do("GET", "/api/trips", ""); !strings.Contains(rec.Body.String(), `"suggested_fare":100`) {
+	if rec := a.do("GET", "/api/trips", ""); !strings.Contains(rec.Body.String(), `"suggested_fare":80`) {
 		t.Fatalf("owner's trip changed: %s", rec.Body)
 	}
 

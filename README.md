@@ -20,7 +20,7 @@ pickup A  →  destination B  →  route preview  →  distance + duration
 
 ## Status
 
-**v1 beta** — personal use behind HTTPS. Scope: [docs/mvp.md](docs/mvp.md).
+**Beta (v0.4)** — in daily use behind HTTPS. Scope: [docs/mvp.md](docs/mvp.md).
 
 ## Run
 
@@ -58,7 +58,6 @@ Details: [architecture.md §5](docs/architecture.md#5-exposing-it-beyond-localho
 | [docs/architecture.md](docs/architecture.md) | Components, estimate flow, hosting |
 | [docs/geospatial.md](docs/geospatial.md) | Map, routing, geocoding |
 | [docs/roadmap.md](docs/roadmap.md) | Post-beta triggers |
-| [docs/background.md](docs/background.md) | Why a new repo |
 
 ## Shape
 
