@@ -7,7 +7,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Trip is a saved estimate plus the amount actually charged.
+// Trip is a saved quote or recorded trip, with the amount actually charged.
 type Trip struct {
 	ID        int64  `json:"id"`
 	UserID    int64  `json:"-"` // set by the server from the session, never by the client

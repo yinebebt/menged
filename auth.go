@@ -383,8 +383,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 // forgotPassword emails a reset link if the address has an account. The answer is
-// the same either way, and the email is sent after answering, so neither the
-// response nor its timing tells whether an account exists.
+// the same either way, and the email is sent in the background.
 func (s *Server) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	var req credentials
 	if err := decodeJSON(w, r, &req); err != nil {

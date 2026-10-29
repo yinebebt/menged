@@ -1,73 +1,85 @@
 # menged
 
-**መንገድ** — road, way, journey.
+**መንገድ** (road, way, journey): a trip calculator for drivers in Addis Ababa.
 
-A personal trip calculator for driving passengers around Addis Ababa. Set pickup and
-destination; get driving distance, duration, route, and a suggested fare from your rate
-card. Optionally save the trip and what you actually charged.
+Drop a pickup and a destination on the map and menged shows the driving distance, the
+time, the route, and a fare from your own rate card. Or start a trip and let it record
+the drive: the fare then comes from the distance actually driven and the time spent
+waiting. Trips you save keep what you actually charged, so over time you can see how
+your rates compare with what passengers pay.
 
-Or record the trip as you drive: menged prices the distance, moving time, and waiting
-time actually driven, and keeps the quote alongside.
+It is a tool for one driver or a few, not a ride-hailing platform: there is no matching,
+dispatch or passenger app.
 
-Not a ride-hailing platform.
+## Features
 
-```
-pickup A  →  destination B  →  route preview  →  distance + duration
-                                                       ↓
-                              save trip  ←  suggested fare  ←  your rate card
-                            (+ what you actually charged)
-```
+- **Quotes**: pickup, an optional stop, and a destination, from a map tap, GPS, place
+  search or a saved place. Distance, duration and fare update as you move the pins.
+- **Trip recording**: browser GPS while menged is on screen, with a live meter. Moving
+  and waiting time are priced separately.
+- **Sharing**: send a quote ("Bole → Ayat, 14.0 km, ~35 min, ETB 240") with a Google
+  Maps link through the phone's share sheet.
+- **Trip log**: saved trips with what was charged, monthly totals, and the rate card used
+  for each trip, so old trips still add up after you change your rates.
+- **Accounts**: email and password, reset by email. Quotes work without signing in.
 
-## Status
+## Quick start
 
-**Beta (v0.4)** — in daily use behind HTTPS. Scope: [docs/mvp.md](docs/mvp.md).
-
-## Run
+You need Go 1.26+ and a free [openrouteservice](https://openrouteservice.org/dev/#/signup)
+API key.
 
 ```sh
-cp config.example.yaml config.yaml   # edit rates
-export ORS_API_KEY=...               # HeiGIT / openrouteservice.org
-go run .                             # → http://127.0.0.1:8080
-# or: go build -o menged . && ./menged
+cp config.example.yaml config.yaml   # set your rates
+export ORS_API_KEY=...
+go run .                             # http://127.0.0.1:8080
 ```
 
-One binary, one config, one SQLite file (`menged.db`).  
-Health: `GET /api/health` → `{"status":"ok"}`.
+menged is one binary with the web app embedded, one YAML config and one SQLite file
+(`menged.db`, created on first run). Password-reset emails go to the server log until you
+configure mail.
 
-## Deploy (VPS)
+## Configuration
 
-Keep menged on loopback behind a TLS reverse proxy. The process refuses a non-loopback listen unless you pass `-allow-public-listen`.
+Every setting is in [config.example.yaml](config.example.yaml) with a comment. The main
+groups:
 
-1. `go build -o menged .` — ship binary + `config.yaml`; `ORS_API_KEY` in the environment only.
-2. `server.listen: 127.0.0.1:8080`
-3. nginx/Caddy: HTTPS → `127.0.0.1:8080`, setting `X-Forwarded-Proto`; rate-limit `/api/login` and the routing endpoints.
-4. Set `server.public_url` (reset links point there) and `mail:` for password-reset emails: `provider: mailtrap`, `MAILTRAP_API_TOKEN` in the environment, and `from_email` on a domain verified in Mailtrap (until then its demo domain only sends to the Mailtrap account's own address). Turn click tracking off for that domain, or reset links go through Mailtrap's redirect.
-5. Create your account in the app (sign-in sheet → "Create an account"). `server.signup: false` closes sign-up; `./menged -reset-password EMAIL` sets a password from the server if email is broken.
-6. systemd (or similar). Probe: `curl -fsS https://your.host/api/health`
-7. Backup `menged.db` (and `-wal` / `-shm` if present)
+| Section | What it sets |
+|---------|--------------|
+| `fare` | Currency, base fare, per-km, per-minute and per-waiting-minute rates, minimum fare, rounding |
+| `routing` | `ors` (hosted openrouteservice) or `osrm` (self-hosted) |
+| `geocoding` | `pelias` (uses the ORS key) or `off` |
+| `server` | Listen address, database path, map style, whether sign-up is open, public URL |
+| `mail` | `log` or `mailtrap` for password-reset emails |
 
-Before v1 there are no migrations: when the schema changes, move the old `menged.db` aside and let the new build create a fresh one.
+`${VAR}` in the file is replaced from the environment, so keys stay out of the config.
 
-Details: [architecture.md §5](docs/architecture.md#5-exposing-it-beyond-localhost).
+## Running it on a server
 
-## Docs
+Keep menged on loopback behind a TLS reverse proxy that sets `X-Forwarded-Proto`; it
+refuses a public listen address unless you pass `-allow-public-listen`. Rate-limit the
+sign-in endpoints and the ones that spend routing quota at the proxy. The whole state is
+`menged.db`, so backing up that file is enough.
 
-| Doc | Contents |
-|-----|----------|
-| [docs/mvp.md](docs/mvp.md) | Scope, fare model, API, non-goals |
-| [docs/architecture.md](docs/architecture.md) | Components, estimate flow, hosting |
-| [docs/geospatial.md](docs/geospatial.md) | Map, routing, geocoding |
-| [docs/roadmap.md](docs/roadmap.md) | Post-beta triggers |
+## Documentation
 
-## Shape
+| | |
+|-|-|
+| [docs/architecture.md](docs/architecture.md) | How the pieces fit: server, storage, web app, sign-in |
+| [docs/fares.md](docs/fares.md) | The fare formula and how recorded trips are measured |
+| [docs/geospatial.md](docs/geospatial.md) | Map tiles, routing and geocoding providers |
+| [docs/roadmap.md](docs/roadmap.md) | What might come next, and what is out of scope |
+| [docs/openapi.yaml](docs/openapi.yaml) | HTTP API |
+| [schema.sql](schema.sql) | Database schema |
 
-- **Map**: MapLibre GL JS + OpenFreeMap
-- **Routing**: HeiGIT ORS (`Router`); OSRM later via config
-- **Geocoding**: HeiGIT Pelias on the ORS key
-- **Storage**: SQLite (WAL)
-- **Client**: static HTML/CSS/JS + `manifest.json` (no service worker)
+## Development
 
-## Non-goals
+```sh
+gofmt -l . && go vet ./... && go test -race ./...
+```
 
-Matching, dispatch, per-driver rate cards, passenger apps, in-app payments, surge
-automation, microservices. See [docs/roadmap.md](docs/roadmap.md).
+CI runs the same, plus a lint of `docs/openapi.yaml`. The web app is plain HTML, CSS and JavaScript in `web/`, with no build step. Edit and
+reload.
+
+## License
+
+[MIT](LICENSE)

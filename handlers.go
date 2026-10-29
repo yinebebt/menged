@@ -230,7 +230,7 @@ type measureRequest struct {
 	Track      []TrackPoint `json:"track"`
 	Multiplier float64      `json:"multiplier"`
 	// Route asks the router for the road distance through the track. The live meter
-	// leaves it off so it does not spend routing quota every few seconds.
+	// leaves it off so its updates don't spend routing quota.
 	Route bool `json:"route"`
 }
 

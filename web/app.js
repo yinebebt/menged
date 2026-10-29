@@ -49,7 +49,7 @@ async function api(path, opts = {}) {
   // Some answers have no body (204, and 202 from forgot-password).
   const text = await resp.text();
   let body = null;
-  try { body = text ? JSON.parse(text) : null; } catch (_) { /* not JSON: an nginx error page */ }
+  try { body = text ? JSON.parse(text) : null; } catch (_) { /* not JSON: a proxy error page */ }
   if (!resp.ok) {
     if (resp.status === 401 && path !== '/api/login') setUser(null);
     const err = new Error((body && body.error) || resp.statusText || 'Request failed');

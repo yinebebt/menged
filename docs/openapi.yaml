@@ -1,0 +1,632 @@
+openapi: 3.1.0
+info:
+  title: menged API
+  version: 0.2.1
+  summary: Trip quotes, recorded trips, and a per-user trip log.
+  description: |
+    Trips and places need the session cookie from `login` or `signup`; the rest is
+    public. Errors are `{"error": "..."}`.
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local default
+
+tags:
+  - name: quotes
+    description: Pricing a trip before or after driving it.
+  - name: places
+    description: Place search and reverse labels (public), and saved places (per user).
+  - name: account
+    description: Sign-up, sign-in, sessions and password reset.
+  - name: trips
+    description: The signed-in user's trip log.
+  - name: meta
+    description: Health and client configuration.
+
+paths:
+  /api/health:
+    get:
+      tags: [meta]
+      summary: Liveness probe
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+
+  /api/config:
+    get:
+      tags: [meta]
+      summary: Rate card and map settings for the client
+      operationId: getConfig
+      security: []
+      responses:
+        "200":
+          description: Client configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClientConfig" }
+
+  /api/estimate:
+    post:
+      tags: [quotes]
+      summary: Quote a trip between points
+      description: Routes pickup → optional stop → destination and prices the result.
+      operationId: estimate
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EstimateRequest" }
+      responses:
+        "200":
+          description: Route and fare.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Estimate" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "422":
+          description: No road near one of the pins.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The routing provider failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/measure:
+    post:
+      tags: [quotes]
+      summary: Price a recorded GPS track
+      description: "`route: true` uses road distance; otherwise GPS distance. See fares.md."
+      operationId: measure
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MeasureRequest" }
+      responses:
+        "200":
+          description: Measured trip and fare.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Measurement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "422":
+          description: No usable fixes (none yet, or all outside the service area).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/geocode:
+    get:
+      tags: [places]
+      summary: Search places by name
+      operationId: geocode
+      security: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search text. Fewer than 2 characters returns an empty list.
+          schema: { type: string }
+        - name: lat
+          in: query
+          description: Bias results towards this point (defaults to central Addis Ababa).
+          schema: { type: number }
+        - name: lng
+          in: query
+          schema: { type: number }
+      responses:
+        "200":
+          description: Matching places, best first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PlaceHit" }
+        "503": { $ref: "#/components/responses/GeocodingOff" }
+
+  /api/reverse:
+    get:
+      tags: [places]
+      summary: Label a point
+      operationId: reverse
+      security: []
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number }
+        - name: lng
+          in: query
+          required: true
+          schema: { type: number }
+      responses:
+        "200":
+          description: The best short label for the point.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  label: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/GeocodingOff" }
+
+  /api/signup:
+    post:
+      tags: [account]
+      summary: Create an account and sign in
+      operationId: signup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "200": { $ref: "#/components/responses/SignedIn" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403":
+          description: "Sign-up is closed (`server.signup: false`)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: An account with that email already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/login:
+    post:
+      tags: [account]
+      summary: Sign in
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "200": { $ref: "#/components/responses/SignedIn" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: Wrong email or password.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/logout:
+    post:
+      tags: [account]
+      summary: Sign out this browser
+      operationId: logout
+      security: []
+      responses:
+        "204":
+          description: Session ended and cookie cleared.
+
+  /api/me:
+    get:
+      tags: [account]
+      summary: The signed-in user
+      operationId: me
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/SignInRequired" }
+
+  /api/password/forgot:
+    post:
+      tags: [account]
+      summary: Email a password-reset link
+      description: Answers 202 whether or not the account exists. The link works once, for an hour.
+      operationId: forgotPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202":
+          description: Accepted; an email is sent if the account exists.
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/password/reset:
+    post:
+      tags: [account]
+      summary: Set a new password from a reset link
+      description: Ends every session for the account, so the user signs in again.
+      operationId: resetPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string, description: The `reset` query parameter from the emailed link. }
+                password: { $ref: "#/components/schemas/Password" }
+      responses:
+        "200":
+          description: Password changed; the email is returned to prefill sign-in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/trips:
+    get:
+      tags: [trips]
+      summary: List your trips, newest first
+      operationId: listTrips
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: Trips.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Trip" }
+        "401": { $ref: "#/components/responses/SignInRequired" }
+    post:
+      tags: [trips]
+      summary: Save a quoted or recorded trip
+      description: The server sets the fare and rates. Set `started_at` for a recorded trip.
+      operationId: saveTrip
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Trip" }
+      responses:
+        "201":
+          description: The saved trip.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Trip" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/SignInRequired" }
+
+  /api/trips/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    patch:
+      tags: [trips]
+      summary: Record what was charged, or edit the note
+      operationId: editTrip
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: At least one field. Omitted fields are left as they are.
+              properties:
+                actual_charged: { type: number }
+                note: { type: string }
+      responses:
+        "204": { description: Updated. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/SignInRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [trips]
+      summary: Delete a trip
+      operationId: deleteTrip
+      security: [{ session: [] }]
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/SignInRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/places:
+    get:
+      tags: [places]
+      summary: List your saved places
+      operationId: listPlaces
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: Saved places.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Place" }
+        "401": { $ref: "#/components/responses/SignInRequired" }
+    post:
+      tags: [places]
+      summary: Save a place
+      operationId: addPlace
+      security: [{ session: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Place" }
+      responses:
+        "201":
+          description: The saved place.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Place" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/SignInRequired" }
+        "409":
+          description: You already have a place with that label.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/places/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      tags: [places]
+      summary: Remove a saved place
+      operationId: deletePlace
+      security: [{ session: [] }]
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/SignInRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: menged_session
+      description: HttpOnly cookie set by login or signup; lasts 90 days and is renewed when used.
+
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+
+  responses:
+    BadRequest:
+      description: Invalid input, such as malformed JSON or a point outside the service area.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    SignInRequired:
+      description: No valid session.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No such item for this user.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    GeocodingOff:
+      description: "Geocoding is not configured (`geocoding.provider: off`)."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    SignedIn:
+      description: Signed in; the session cookie is set.
+      headers:
+        Set-Cookie:
+          schema: { type: string }
+          description: "`menged_session=...; HttpOnly; SameSite=Lax` (and `Secure` behind TLS)"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/User" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Point:
+      type: object
+      description: WGS84 coordinate. Must fall inside the service area (Ethiopia).
+      required: [lat, lng]
+      properties:
+        lat: { type: number }
+        lng: { type: number }
+
+    Rates:
+      type: object
+      description: The rate card from the server config.
+      properties:
+        currency: { type: string, examples: [ETB] }
+        base_fare: { type: number }
+        price_per_km: { type: number }
+        price_per_minute: { type: number }
+        price_per_waiting_minute: { type: number, description: 0 hides waiting time in the client. }
+        minimum_fare: { type: number }
+        rounding: { type: number, description: The final fare is rounded to a multiple of this. }
+
+    Breakdown:
+      type: object
+      description: How a fare was assembled; see fares.md.
+      properties:
+        base: { type: number }
+        distance_cost: { type: number }
+        duration_cost: { type: number }
+        waiting_cost: { type: number }
+        raw: { type: number, description: Sum of the four costs. }
+        minimum_hit: { type: boolean }
+        multiplier: { type: number }
+        fare: { type: number }
+
+    ClientConfig:
+      type: object
+      properties:
+        rates: { $ref: "#/components/schemas/Rates" }
+        map_style: { type: string, format: uri }
+        geocode: { type: boolean, description: Whether place search and reverse labels are available. }
+        map_center: { $ref: "#/components/schemas/Point" }
+        map_zoom: { type: number }
+        map_max_bounds:
+          type: array
+          description: "[[west, south], [east, north]]"
+          items:
+            type: array
+            items: { type: number }
+        signup: { type: boolean, description: Whether new accounts can be created. }
+
+    EstimateRequest:
+      type: object
+      required: [pickup, dest]
+      properties:
+        pickup: { $ref: "#/components/schemas/Point" }
+        stop: { $ref: "#/components/schemas/Point" }
+        dest: { $ref: "#/components/schemas/Point" }
+        waiting_min: { type: number, minimum: 0, maximum: 600, default: 0 }
+        multiplier: { type: number, default: 1, description: 0 or less means 1. }
+
+    Estimate:
+      type: object
+      properties:
+        distance_km: { type: number }
+        duration_min: { type: number }
+        geometry: { $ref: "#/components/schemas/Polyline" }
+        fare: { type: number }
+        breakdown: { $ref: "#/components/schemas/Breakdown" }
+        rates: { $ref: "#/components/schemas/Rates" }
+
+    TrackPoint:
+      type: object
+      required: [lat, lng, t]
+      properties:
+        lat: { type: number }
+        lng: { type: number }
+        t: { type: integer, format: int64, description: Unix time in milliseconds. }
+        acc: { type: number, description: Reported accuracy in metres; 0 if unknown. }
+
+    MeasureRequest:
+      type: object
+      required: [track]
+      properties:
+        track:
+          type: array
+          maxItems: 20000
+          items: { $ref: "#/components/schemas/TrackPoint" }
+        multiplier: { type: number, default: 1 }
+        route: { type: boolean, default: false, description: Ask the router for the road distance. }
+
+    Measurement:
+      type: object
+      properties:
+        distance_km: { type: number }
+        duration_min: { type: number, description: Moving time. }
+        waiting_min: { type: number }
+        rough: { type: boolean, description: Only low-accuracy fixes were available. }
+        method: { type: string, enum: [road, gps] }
+        geometry: { $ref: "#/components/schemas/Polyline" }
+        track: { $ref: "#/components/schemas/Polyline" }
+        start: { $ref: "#/components/schemas/Point" }
+        end: { $ref: "#/components/schemas/Point" }
+        fare: { type: number }
+        breakdown: { $ref: "#/components/schemas/Breakdown" }
+        rates: { $ref: "#/components/schemas/Rates" }
+
+    Polyline:
+      type: string
+      description: Google encoded polyline, precision 5.
+
+    PlaceHit:
+      type: object
+      properties:
+        label: { type: string }
+        lat: { type: number }
+        lng: { type: number }
+
+    Credentials:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { $ref: "#/components/schemas/Password" }
+
+    Password:
+      type: string
+      minLength: 8
+      description: 8 characters to 72 bytes (the bcrypt limit).
+
+    User:
+      type: object
+      properties:
+        email: { type: string, format: email }
+
+    Place:
+      type: object
+      required: [label, lat, lng]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        label: { type: string, description: Unique per user. }
+        lat: { type: number }
+        lng: { type: number }
+        created_at: { type: string, format: date-time, readOnly: true }
+
+    Trip:
+      type: object
+      description: A saved quote or recorded trip.
+      required: [pickup_lat, pickup_lng, dest_lat, dest_lng, distance_km, duration_min]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+        pickup_label: { type: string }
+        pickup_lat: { type: number }
+        pickup_lng: { type: number }
+        dest_label: { type: string }
+        dest_lat: { type: number }
+        dest_lng: { type: number }
+        stop_label: { type: string }
+        stop_lat: { type: number, description: "Set together with stop_lng, or neither." }
+        stop_lng: { type: number }
+        waiting_min: { type: number, minimum: 0, maximum: 600 }
+        distance_km: { type: number, minimum: 0, description: Must be above 0 for a quote. }
+        duration_min: { type: number, minimum: 0 }
+        route_geometry: { $ref: "#/components/schemas/Polyline" }
+        suggested_fare: { type: number, readOnly: true }
+        actual_charged: { type: [number, "null"], description: What the passenger paid; null until recorded. }
+        multiplier: { type: number, default: 1 }
+        rate_base: { type: number, readOnly: true }
+        rate_per_km: { type: number, readOnly: true }
+        rate_per_min: { type: number, readOnly: true }
+        rate_per_wait_min: { type: number, readOnly: true }
+        note: { type: string }
+        started_at: { type: string, format: date-time, description: Set on recorded trips. }
+        ended_at: { type: string, format: date-time }
+        track: { $ref: "#/components/schemas/Polyline" }
+        quoted_fare: { type: number, description: The quote given before a recorded trip started. }
