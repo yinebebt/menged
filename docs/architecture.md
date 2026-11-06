@@ -60,8 +60,8 @@ so nudging a pin doesn't spend quota. Providers and their limits are in
 [geospatial.md](geospatial.md).
 
 Points outside a bounding box around Ethiopia are rejected before any provider is
-called. The map's default camera and pan limits are around Addis Ababa and come from
-`/api/config`.
+called; in a recorded track they are dropped. The map's default camera and pan limits
+are around Addis Ababa and come from `/api/config`.
 
 ## Storage
 
