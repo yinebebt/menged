@@ -50,7 +50,8 @@ main way to set a pin you use often. Remote search is there to help.
 provides both:
 
 - **Search** (`/api/geocode`) returns up to five places in Ethiopia, biased towards
-  the map's position. In the app, saved places are listed above remote hits.
+  the pickup pin, or the city centre when there is none. In the app, saved places are
+  listed above remote hits.
 - **Reverse labels** (`/api/reverse`) name a pin set by a tap, a drag or GPS. Results are
   cached for about 30 minutes per 50 m, so nudging a pin is free.
 
